@@ -1,0 +1,19 @@
+# .gitignore for the postgres cp3 package
+
+# cp3 build / runtime artifacts
+.cp3/build
+.cp3/out
+tests/.cp3/build
+tests/.cp3/out
+tests/.cp3/lock.json
+
+# native build intermediates
+native/obj
+native/build
+
+# build logs
+*.log
+
+# editor / OS files
+.DS_Store
+Thumbs.db

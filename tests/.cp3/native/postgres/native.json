@@ -1,0 +1,737 @@
+{
+    "schema":  "cp3-native-binding/1",
+    "id":  "postgres",
+    "source":  "../native/include/postgres_shim.h",
+    "includeDirs":  [
+                        "../native/include"
+                    ],
+    "defines":  [
+
+                ],
+    "headers":  [
+                    "postgres_shim.h"
+                ],
+    "libDirs":  [
+                    "../native/lib"
+                ],
+    "linkNames":  [
+                      "postgres_shim",
+                      "pq"
+                  ],
+    "staticLibraries":  [
+                            "../native/lib/libpostgres_shim.a"
+                        ],
+    "sharedLibraries":  [
+                            "../native/lib/libpq.a"
+                        ],
+    "runtimeDlls":  [
+                        "../native/runtime/libpq.dll",
+                        "../native/runtime/libssl-3-x64.dll",
+                        "../native/runtime/libcrypto-3-x64.dll",
+                        "../native/runtime/libintl-9.dll",
+                        "../native/runtime/libiconv-2.dll",
+                        "../native/runtime/libwinpthread-1.dll"
+                    ],
+    "abi":  "itanium",
+    "target":  "x86_64-w64-windows-gnu",
+    "libclangVersion":  "clang version 23.1.4 (https://github.com/llvm/llvm-project 7a941dfb2877a0b8cf30323fefa85ad019e0b0f5)",
+    "contentHash":  "e9eaab6d4310f09f949589abc424fce88d6d6de550ba57fa7a5fe45bf3b62f76",
+    "functions":  [
+                      {
+                          "name":  "cp3pg_connect",
+                          "cppName":  "cp3pg_connect",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conninfo",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_close",
+                          "cppName":  "cp3pg_close",
+                          "returnType":  {
+                                             "kind":  "void"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_status",
+                          "cppName":  "cp3pg_status",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_error",
+                          "cppName":  "cp3pg_error",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_last_error",
+                          "cppName":  "cp3pg_last_error",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_exec",
+                          "cppName":  "cp3pg_exec",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "sql",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_exec1",
+                          "cppName":  "cp3pg_exec1",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "sql",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p1",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_exec2",
+                          "cppName":  "cp3pg_exec2",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "sql",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p1",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p2",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_exec3",
+                          "cppName":  "cp3pg_exec3",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "sql",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p1",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p2",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "p3",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_result_status",
+                          "cppName":  "cp3pg_result_status",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_result_error",
+                          "cppName":  "cp3pg_result_error",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_cmd_status",
+                          "cppName":  "cp3pg_cmd_status",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_cmd_tuples",
+                          "cppName":  "cp3pg_cmd_tuples",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_affected",
+                          "cppName":  "cp3pg_affected",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_ntuples",
+                          "cppName":  "cp3pg_ntuples",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_nfields",
+                          "cppName":  "cp3pg_nfields",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_fname",
+                          "cppName":  "cp3pg_fname",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "col",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "int",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_fnumber",
+                          "cppName":  "cp3pg_fnumber",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "name",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_getvalue",
+                          "cppName":  "cp3pg_getvalue",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "row",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "int",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "col",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "int",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_getisnull",
+                          "cppName":  "cp3pg_getisnull",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "row",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "int",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "col",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "int",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_clear",
+                          "cppName":  "cp3pg_clear",
+                          "returnType":  {
+                                             "kind":  "void"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "res",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_escape_literal",
+                          "cppName":  "cp3pg_escape_literal",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "value",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_escape_identifier",
+                          "cppName":  "cp3pg_escape_identifier",
+                          "returnType":  {
+                                             "kind":  "string"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         },
+                                         {
+                                             "name":  "value",
+                                             "kind":  "cstr",
+                                             "type":  {
+                                                          "kind":  "string"
+                                                      },
+                                             "cppType":  "const std::string \u0026",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_lib_version",
+                          "cppName":  "cp3pg_lib_version",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+
+                                     ]
+                      },
+                      {
+                          "name":  "cp3pg_server_version",
+                          "cppName":  "cp3pg_server_version",
+                          "returnType":  {
+                                             "kind":  "number"
+                                         },
+                          "returnsCStr":  false,
+                          "isStatic":  false,
+                          "params":  [
+                                         {
+                                             "name":  "conn",
+                                             "kind":  "value",
+                                             "type":  {
+                                                          "kind":  "number"
+                                                      },
+                                             "cppType":  "long long",
+                                             "cppPointer":  "",
+                                             "cppArgCount":  1
+                                         }
+                                     ]
+                      }
+                  ],
+    "classes":  [
+
+                ],
+    "enums":  [
+
+              ],
+    "rejected":  [
+
+                 ]
+}

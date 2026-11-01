@@ -1,0 +1,6 @@
+{
+  "name": "postgres",
+  "version": "0.1.0",
+  "type": "package",
+  "main": "src/index.cp3"
+}
