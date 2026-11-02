@@ -200,3 +200,12 @@ postgres/
   package.json           # "type": "package", main: "src/index.cp3"
   README.md
 ```
+
+## License
+
+The package source and shim are MIT licensed; see [LICENSE](LICENSE).
+
+The binaries in `native/runtime/` are vendored from the PostgreSQL 17.6
+Windows distribution and retain their upstream licenses. libpq is distributed
+under the PostgreSQL License; OpenSSL, libintl, libiconv and the MinGW runtime
+DLLs retain their respective upstream licenses.
