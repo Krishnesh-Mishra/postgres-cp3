@@ -155,11 +155,24 @@ if ($Regenerate) {
     $packageJson.staticLibraries = @("native/lib/libpostgres_shim.a")
     $packageJson.sharedLibraries = @("native/lib/libpq.a")
     $packageJson.runtimeDlls = $runtimeDlls
+
+    # The generated index records the absolute source path and the compiler
+    # hashes the exact index bytes. Rewrite the comment to a repository-relative
+    # path, then refresh contentHash so the binding is not reported stale.
+    $packageIndexPath = Join-Path $root ".cp3\native\postgres\index.cp3"
+    $packageIndex = Get-Content $packageIndexPath -Raw
+    $packageIndex = $packageIndex -replace '// Source: .*postgres_shim\.h', '// Source: native/include/postgres_shim.h'
+    [System.IO.File]::WriteAllText($packageIndexPath, $packageIndex, $utf8)
+    $packageJson.contentHash = (Get-FileHash $packageIndexPath -Algorithm SHA256).Hash.ToLower()
     [System.IO.File]::WriteAllText($packageJsonPath, ($packageJson | ConvertTo-Json -Depth 100), $utf8)
 
     $testNative = Join-Path $root "tests\.cp3\native\postgres"
     New-Item -ItemType Directory -Force $testNative | Out-Null
-    Copy-Item (Join-Path $root ".cp3\native\postgres\index.cp3") (Join-Path $testNative "index.cp3") -Force
+    $testIndexPath = Join-Path $testNative "index.cp3"
+    Copy-Item $packageIndexPath $testIndexPath -Force
+    $testIndex = Get-Content $testIndexPath -Raw
+    $testIndex = $testIndex -replace '// Source: .*postgres_shim\.h', '// Source: ../native/include/postgres_shim.h'
+    [System.IO.File]::WriteAllText($testIndexPath, $testIndex, $utf8)
 
     $testJson = Get-Content $packageJsonPath -Raw | ConvertFrom-Json
     $testJson.source = "../native/include/postgres_shim.h"
@@ -168,6 +181,7 @@ if ($Regenerate) {
     $testJson.staticLibraries = @("../native/lib/libpostgres_shim.a")
     $testJson.sharedLibraries = @("../native/lib/libpq.a")
     $testJson.runtimeDlls = @($runtimeDlls | ForEach-Object { "../$_" })
+    $testJson.contentHash = (Get-FileHash $testIndexPath -Algorithm SHA256).Hash.ToLower()
     [System.IO.File]::WriteAllText((Join-Path $testNative "native.json"), ($testJson | ConvertTo-Json -Depth 100), $utf8)
 
     Write-Host "binding regenerated; test binding updated"
