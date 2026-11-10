@@ -1,0 +1,12 @@
+# Pin generated bindings and binaries: the cp3 compiler hashes index.cp3
+# bytes to validate native.json, so git must never normalize line endings
+# here.
+.cp3/native/postgres/index.cp3 -text
+.cp3/native/postgres/native.json -text
+tests/.cp3/native/postgres/index.cp3 -text
+tests/.cp3/native/postgres/native.json -text
+*.a -text
+*.dll -text
+*.pak -text
+*.zip -text
+*.exe -text
