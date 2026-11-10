@@ -1,0 +1,51 @@
+// params.cp3 - parameter packing for extended-protocol queries.
+//
+// cp3 v0.2.0 cannot emit arrays and cannot pass class instances across
+// module boundaries, so parameters are packed into a single string by
+// these free functions. The packed form is consumed by the native shim
+// (see native/src/shim_internal.hpp): one "v:<base64>" or "n" segment per
+// parameter, segments separated by single spaces.
+//
+// Typical use:
+//   const packed = pack(textParam("hello"), intParam(41));
+//   const res = await queryParams(conn, "select $1, $2", packed);
+
+import { Buffer } from "std/buffer";
+
+// "v:<base64-of-value-bytes>" for a text parameter. The server receives
+// the string's UTF-8 bytes.
+export function textParam(value: string): string {
+  return "v:" + Buffer.from(value).toString("base64");
+}
+
+// "v:<base64-of-String(number)-bytes>" for an integer parameter. Numbers
+// above 2^53 lose precision in cp3's f64 representation - pass them as
+// textParam("...") instead.
+export function intParam(value: number): string {
+  return textParam(String(value));
+}
+
+// "v:<base64-of-String(number)-bytes>" for a floating-point parameter.
+export function realParam(value: number): string {
+  return textParam(String(value));
+}
+
+// "v:dHJ1ZQ=="' / "v:ZmFsc2U=" for a boolean parameter.
+export function boolParam(value: boolean): string {
+  return textParam(value ? "true" : "false");
+}
+
+// "n" for an SQL NULL parameter.
+export function nilParam(): string {
+  return "n";
+}
+
+// Join two packed segments.
+export function pack2(p1: string, p2: string): string {
+  return p1 + " " + p2;
+}
+
+// Join three packed segments.
+export function pack3(p1: string, p2: string, p3: string): string {
+  return p1 + " " + p2 + " " + p3;
+}

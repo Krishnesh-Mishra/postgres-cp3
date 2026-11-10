@@ -1,0 +1,221 @@
+// bench.cp3 - cp3 bindings baseline for the benchmark suite.
+//
+// Run from this directory (run.py does this): cp3 run src/bench.cp3
+// Environment: CP3_PG_CONNINFO or CP3_PG_HOST/PORT/DB/USER/PASSWORD
+//
+// Workloads mirror benchmark/cpp and benchmark/node:
+//   select1     1000 x simple `select 1`
+//   series      100  x select * from generate_series(1,1000), draining all rows
+//   insert500   10   x (BEGIN; INSERT 500-row multi-VALUES; COMMIT)
+//   prepared    prepare + 1000 x executePrepared("select $1::int")
+//   pool16      16 concurrent pool queries (pg_sleep(0.1) x 16, max=16) -
+//               reports wall time for the whole burst
+
+import time from "std/time";
+import console from "std/console";
+import process from "std/process";
+
+import {
+  connect,
+  close,
+  query,
+  prepare,
+  executePrepared,
+  executeParams,
+} from "../../src/client.cp3";
+import {
+  clear,
+  affected as resAffected,
+  rowCount,
+  value,
+} from "../../src/result.cp3";
+import { intParam } from "../../src/params.cp3";
+import {
+  poolCreate,
+  poolQuery,
+  poolEnd,
+} from "../../src/pool.cp3";
+import { conninfo } from "../../src/conninfo.cp3";
+import { env } from "std/env";
+
+function clientConninfo(): string {
+  const override = env.get("CP3_PG_CONNINFO", { default: "" });
+  if (override !== "") {
+    return override;
+  }
+  const host = env.get("CP3_PG_HOST", { default: "127.0.0.1" });
+  const port = env.get("CP3_PG_PORT", { default: 55432 });
+  const db = env.get("CP3_PG_DB", { default: "cp3_test" });
+  const user = env.get("CP3_PG_USER", { default: "postgres" });
+  const password = env.get("CP3_PG_PASSWORD", { default: "" });
+  return conninfo(host, port, db, user, password) + " connect_timeout=2";
+}
+
+const CI = clientConninfo();
+
+async function benchSelect1(conn: number, iterations: number): Promise<undefined> {
+  let watch = time.stopwatch();
+  watch.start();
+  for (let i = 0; i < iterations; i = i + 1) {
+    const res = await query(conn, "select 1");
+    if (res > 0) {
+      clear(res);
+    }
+  }
+  watch.stop();
+  const ms = watch.elapsed();
+  console.log("cp3 select1 " + iterations.toString() + " " + ms.toString() + " " +
+              (iterations > 0 ? (ms * 1000.0) / iterations : 0).toString());
+  return undefined;
+}
+
+async function benchSeries(conn: number, iterations: number): Promise<undefined> {
+  let watch = time.stopwatch();
+  watch.start();
+  for (let i = 0; i < iterations; i = i + 1) {
+    const res = await query(conn, "select * from generate_series(1, 1000)");
+    if (res > 0) {
+      // Drain every row so the benchmark is honest.
+      const n = rowCount(res);
+      for (let r = 0; r < n; r = r + 1) {
+        const v = value(res, r, 0);
+        if (v.length > 1000000) {
+          console.error("impossible row width");
+        }
+      }
+      clear(res);
+    }
+  }
+  watch.stop();
+  const ms = watch.elapsed();
+  console.log("cp3 series " + iterations.toString() + " " + ms.toString() + " " +
+              (iterations > 0 ? (ms * 1000.0) / iterations : 0).toString());
+  return undefined;
+}
+
+async function benchInsert500(conn: number, batches: number): Promise<undefined> {
+  // One multi-VALUES INSERT per batch, inside one transaction each.
+  let values = "";
+  for (let i = 0; i < 500; i = i + 1) {
+    if (i > 0) {
+      values = values + ",";
+    }
+    values = values + "(" + i.toString() + ",'row-" + i.toString() + "')";
+  }
+  const sql = "insert into cp3_bench_items (id, note) values " + values;
+
+  await query(conn,
+    "drop table if exists cp3_bench_items; " +
+    "create table cp3_bench_items (id int, note text)");
+
+  let watch = time.stopwatch();
+  watch.start();
+  for (let b = 0; b < batches; b = b + 1) {
+    await query(conn, "begin");
+    const ins = await query(conn, sql);
+    if (ins > 0) {
+      const n = resAffected(ins);
+      clear(ins);
+      if (n !== 500) {
+        console.error("insert500: affected " + n.toString() + ", want 500");
+      }
+    } else {
+      console.error("insert500: insert failed");
+    }
+    await query(conn, "commit");
+  }
+  watch.stop();
+  const ms = watch.elapsed();
+  const ops = batches * 500;
+  console.log("cp3 insert500 " + ops.toString() + " " + ms.toString() + " " +
+              (ops > 0 ? (ms * 1000.0) / ops : 0).toString());
+  return undefined;
+}
+
+async function benchPrepared(conn: number, iterations: number): Promise<undefined> {
+  const ok = await prepare(conn, "bench_prep", "select $1::int", 1);
+  if (!ok) {
+    console.error("prepare failed");
+    return undefined;
+  }
+  let watch = time.stopwatch();
+  watch.start();
+  for (let i = 0; i < iterations; i = i + 1) {
+    const res = await executePrepared(conn, "bench_prep", intParam(i));
+    if (res > 0) {
+      clear(res);
+    }
+  }
+  watch.stop();
+  const ms = watch.elapsed();
+  console.log("cp3 prepared " + iterations.toString() + " " + ms.toString() + " " +
+              (iterations > 0 ? (ms * 1000.0) / iterations : 0).toString());
+  return undefined;
+}
+
+// Module-scope completion counter for the 16-concurrent burst (closures
+// cannot mutate locals, but they can call module functions which can).
+let poolDone = 0;
+function poolBurstDone(res: number): undefined {
+  if (res > 0) {
+    clear(res);
+  }
+  poolDone = poolDone + 1;
+  return undefined;
+}
+
+// 16 concurrent pg_sleep(0.1) queries should finish in roughly one sleep
+// duration when the pool can actually run 16 clients at once.
+async function benchPool16(pool: number): Promise<undefined> {
+  poolDone = 0;
+  let watch = time.stopwatch();
+  watch.start();
+  for (let i = 0; i < 16; i = i + 1) {
+    // Fire and forget; completions increment poolDone.
+    poolQuery(pool, "select pg_sleep(0.1)").then((res) => {
+      poolBurstDone(res);
+      return undefined;
+    });
+  }
+  // Wait for the burst to drain.
+  let waited = 0;
+  while (true) {
+    if (poolDone >= 16) {
+      break;
+    }
+    await sleep(1);
+    waited = waited + 1;
+    if (waited > 15000) {
+      console.error("pool16 burst did not drain");
+      break;
+    }
+  }
+  watch.stop();
+  const ms = watch.elapsed();
+  console.log("cp3 pool16 16 " + ms.toString() + " " + (ms * 1000.0 / 16).toString());
+  return undefined;
+}
+
+async function main(): Promise<undefined> {
+  const conn = await connect(CI);
+  if (conn === 0) {
+    console.error("could not connect to the test server; set CP3_PG_* or CP3_PG_CONNINFO");
+    process.exit(2);
+    return undefined;
+  }
+
+  await benchSelect1(conn, 1000);
+  await benchSeries(conn, 100);
+  await benchInsert500(conn, 10);
+  await benchPrepared(conn, 1000);
+  close(conn);
+
+  // 16-way concurrency through the pool (max=16).
+  const pool = poolCreate(CI, 16, 0);
+  await benchPool16(pool);
+  await poolEnd(pool);
+
+  return undefined;
+}
+
+main();

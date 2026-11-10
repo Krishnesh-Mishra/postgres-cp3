@@ -1,0 +1,12 @@
+{
+  "name": "postgres-bench",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Benchmark for the cp3 postgres package against node-postgres and libpq (see ../run.py)",
+  "scripts": {
+    "bench": "node bench.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
+}

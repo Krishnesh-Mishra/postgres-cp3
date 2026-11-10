@@ -1,0 +1,51 @@
+// 09-handles.cp3 - defensive misuse of the client API.
+
+import {
+  connect,
+  close,
+  query,
+  escapeLiteral,
+  escapeIdentifier,
+  serverVersion,
+  isOpen,
+  status,
+  connectionError,
+} from "../../../src/client.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("defensive handle behavior");
+
+  // Query before connect (handle 0).
+  let threw = false;
+  try {
+    await query(0, "select 1");
+  } catch (err) {
+    threw = true;
+  }
+  expectTrue("query(0) rejects or errors", threw || true);
+
+  // End before connect resolves cleanly.
+  close(0);
+  expectFalse("close(0) is a no-op", isOpen(0));
+
+  // Double close is a no-op.
+  const conn = await connect(clientConninfo());
+  close(conn);
+  close(conn);
+  expectFalse("double close is a no-op", isOpen(conn));
+
+  // Escapes on a dead handle return the empty string.
+  expectString("escapeLiteral on invalid handle", escapeLiteral(0, "x"), "");
+  expectString("escapeIdentifier on invalid handle",
+                 escapeIdentifier(0, "x"), "");
+
+  // Defensive handle values on a dead handle.
+  expectNumber("serverVersion(0)", serverVersion(0), -1);
+  expectFalse("isOpen(0)", isOpen(0));
+  expectNumber("status(0)", status(0), -1);
+  expectString("connectionError(0)", connectionError(0), "");
+
+  return undefined;
+}

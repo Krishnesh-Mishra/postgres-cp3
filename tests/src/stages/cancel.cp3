@@ -1,0 +1,68 @@
+// 12-cancel.cp3 - cancellation: out-of-band pg_cancel_backend from another
+// connection, and the client-side queryTimeout watchdog (PQcancel).
+//
+// A cancelled statement reports its own error result: not ok, SQLSTATE
+// 57014 ("canceling statement due to user request"). The connection is
+// usable again immediately afterwards.
+
+import {
+  connect,
+  close,
+  query,
+  queryTimeout,
+} from "../../../src/client.cp3";
+import {
+  valueByName,
+  clear,
+  resultOk,
+  resultSqlstate,
+} from "../../../src/result.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("cancellation");
+
+  const conn = await connect(clientConninfo());
+
+  // Find our backend PID.
+  const pidRes = await query(conn, "select pg_backend_pid() as pid");
+  const pid = valueByName(pidRes, 0, "pid");
+  clear(pidRes);
+  expectTrue("pid is a positive number", parseInt(pid) > 0);
+
+  // Start a long-running query on this connection, then cancel it from a
+  // second connection. The cancelled query reports an error result; the
+  // connection becomes usable again immediately.
+  const target = query(conn, "select pg_sleep(5)");
+  const canceler = await connect(clientConninfo());
+  await query(canceler, "select pg_cancel_backend(" + pid + "::int)");
+  const res = await target;
+  expectFalse("cancelled query is not ok", resultOk(res));
+  clear(res);
+
+  // The connection is still usable after a canceled statement.
+  const after = await query(conn, "select 1 as n");
+  expectString("connection usable after cancel",
+                 valueByName(after, 0, "n"), "1");
+  clear(after);
+
+  // Client-side statement timeout: the watchdog fires PQcancel after 200 ms
+  // and the cancelled statement reports SQLSTATE 57014.
+  const timedOut = await queryTimeout(conn, "select pg_sleep(5)", 200);
+  expectFalse("queryTimeout: cancelled statement is not ok",
+              resultOk(timedOut));
+  expectString("queryTimeout: SQLSTATE is 57014",
+               resultSqlstate(timedOut), "57014");
+  clear(timedOut);
+
+  // The connection is still usable after a watchdog-cancelled statement.
+  const afterTimeout = await query(conn, "select 1 as n");
+  expectString("connection usable after statement timeout",
+               valueByName(afterTimeout, 0, "n"), "1");
+  clear(afterTimeout);
+
+  close(conn);
+  close(canceler);
+  return undefined;
+}

@@ -1,0 +1,26 @@
+// 01-conninfo.cp3 - conninfo string construction with proper quoting.
+
+import { conninfo, quoteConninfoField } from "../../../src/conninfo.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("conninfo construction");
+
+  expectString(
+    "basic conninfo",
+    conninfo("127.0.0.1", 55432, "cp3_test", "postgres", ""),
+    "host='127.0.0.1' port=55432 dbname='cp3_test' user='postgres' password=''"
+  );
+
+  const quoted = conninfo("host with space", 5432, "db name", "user'name",
+                          "pass\\word");
+  expectContains("quoted host", quoted, "host='host with space'");
+  expectContains("quoted database", quoted, "dbname='db name'");
+  expectContains("quoted user", quoted, "user='user\\'name'");
+  expectContains("quoted password", quoted, "password='pass\\\\word'");
+
+  // quoteConninfoField handles quotes and backslashes.
+  expectString("quote empty", quoteConninfoField(""), "''");
+  expectString("quote quote", quoteConninfoField("a'b"), "'a\\'b'");
+  return undefined;
+}

@@ -1,0 +1,37 @@
+// fixtures.cp3 - shared server-side fixtures for the test stages.
+
+import { query } from "../../../src/client.cp3";
+import { clear, value, valueByName } from "../../../src/result.cp3";
+
+export const ITEMS_TABLE = "cp3_test_items";
+
+export async function createItemsTable(conn: number): Promise<undefined> {
+  await query(conn, "drop table if exists " + ITEMS_TABLE);
+  await query(conn,
+    "create table " + ITEMS_TABLE + " (" +
+      "id serial primary key, " +
+      "name text not null, " +
+      "qty int not null default 0)"
+  );
+  return undefined;
+}
+
+export async function insertItems(conn: number): Promise<undefined> {
+  await query(conn,
+    "insert into " + ITEMS_TABLE + " (name, qty) values " +
+      "('alpha', 1), ('beta', 2), ('gamma', 3)"
+  );
+  return undefined;
+}
+
+// The value at (row, name), "" when it is NULL or the column is unknown.
+export function val(res: number, row: number, name: string): string {
+  return valueByName(res, row, name);
+}
+
+export async function countRows(conn: number, table: string): Promise<string> {
+  const res = await query(conn, "select count(*)::int as n from " + table);
+  const n = value(res, 0, 0);
+  clear(res);
+  return n;
+}

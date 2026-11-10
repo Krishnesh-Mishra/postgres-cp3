@@ -1,0 +1,92 @@
+// 03-results.cp3 - result metadata and lazy row access.
+
+import { connect, close, query, queryParamsBinary } from "../../../src/client.cp3";
+import {
+  resultStatus,
+  resultError,
+  resultOk,
+  command,
+  affected,
+  rowCount,
+  fieldCount,
+  columnName,
+  columnIndex,
+  fieldOid,
+  value,
+  valueBinary,
+  valueByName,
+  isNull,
+  isNullByName,
+  clear,
+} from "../../../src/result.cp3";
+import { RESULT_TUPLES_OK } from "../../../src/index.cp3";
+import { textParam } from "../../../src/params.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("SELECT and result metadata");
+
+  const conn = await connect(clientConninfo());
+
+  const res = await query(
+    conn,
+    "select 42::int as answer, 'hello'::text as greeting, null::text as missing"
+  );
+  expectTrue("query succeeds", resultOk(res));
+  expectNumber("resultStatus is TUPLES_OK", resultStatus(res), RESULT_TUPLES_OK);
+  expectString("resultError is empty", resultError(res), "");
+  expectNumber("rowCount", rowCount(res), 1);
+  expectNumber("fieldCount", fieldCount(res), 3);
+  expectNumber("affected on SELECT is 0", affected(res), 0);
+  expectStartsWith("SELECT command tag", command(res), "SELECT");
+
+  expectString("columnName(0)", columnName(res, 0), "answer");
+  expectString("columnName(1)", columnName(res, 1), "greeting");
+  expectString("columnName(2)", columnName(res, 2), "missing");
+  expectTrue("fieldOid(0) is int4", fieldOid(res, 0) > 0);
+
+  expectNumber("columnIndex(answer)", columnIndex(res, "answer"), 0);
+  expectNumber("columnIndex(greeting)", columnIndex(res, "greeting"), 1);
+  expectNumber("columnIndex(unknown)", columnIndex(res, "nope"), -1);
+
+  expectString("value(answer)", value(res, 0, 0), "42");
+  expectString("valueByName(answer)", valueByName(res, 0, "answer"), "42");
+  expectString("valueByName(greeting)", valueByName(res, 0, "greeting"), "hello");
+  expectFalse("isNull(answer)", isNull(res, 0, 0));
+  expectTrue("isNull(missing)", isNull(res, 0, 2));
+  expectTrue("isNullByName(missing)", isNullByName(res, 0, "missing"));
+  expectString("NULL value is empty", value(res, 0, 2), "");
+
+  clear(res);
+
+  // Binary protocol path decodes the common scalar types.
+  const binary = await queryParamsBinary(
+    conn,
+    "select true::bool as b, 42::int4 as i4, 2::int8 as i8, " +
+    "1.5::float8 as f8, '\\xdeadbeef'::bytea as bin",
+    ""
+  );
+  expectString("binary bool decodes", valueBinary(binary, 0, 0), "true");
+  expectString("binary int4 decodes", valueBinary(binary, 0, 1), "42");
+  expectString("binary int8 decodes", valueBinary(binary, 0, 2), "2");
+  expectString("binary float8 decodes", valueBinary(binary, 0, 3), "1.5");
+  expectString("binary bytea decodes as base64",
+                 valueBinary(binary, 0, 4), "3q2+7w==");
+  clear(binary);
+
+  // Binary float4 with an exact binary fraction.
+  const float4 = await queryParamsBinary(conn, "select 0.5::float4 as f4", "");
+  expectString("binary float4 decodes", valueBinary(float4, 0, 0), "0.5");
+  clear(float4);
+
+  // Binary with conflict-free empty-string param.
+  const withParam = await queryParamsBinary(
+    conn, "select $1::float4 as f4", textParam("0.5")
+  );
+  expectString("binary param decodes", valueBinary(withParam, 0, 0), "0.5");
+  clear(withParam);
+
+  close(conn);
+  return undefined;
+}

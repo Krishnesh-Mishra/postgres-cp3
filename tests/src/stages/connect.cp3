@@ -1,0 +1,61 @@
+// 02-connect.cp3 - connection lifecycle, connect timeout, events-free API.
+
+import {
+  connect,
+  close,
+  isOpen,
+  serverVersion,
+  lastError,
+  status,
+  connectionError,
+} from "../../../src/client.cp3";
+import { clientConninfo, host, port, database, user } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("connection lifecycle");
+
+  const conn = await connect(clientConninfo());
+  expectTrue("client connects", conn > 0);
+  expectTrue("isOpen on a live handle", isOpen(conn));
+  expectAtLeast("serverVersion reports a server version",
+                  serverVersion(conn), 160000);
+
+  // A failed connection returns 0 and fills lastError().
+  const bad = await connect("host=127.0.0.1 port=1 dbname=cp3_test user=postgres connect_timeout=2");
+  expectNumber("invalid connect returns 0", bad, 0);
+  expectTrue("lastError after an invalid connect", lastError().length > 0);
+
+  // Wrong database also fails.
+  const badDb = await connect(
+    "host=" + host() + " port=" + port().toString() +
+    " dbname=cp3_definitely_missing_database user=" + user() +
+    " connect_timeout=2"
+  );
+  expectNumber("connecting to a missing database fails", badDb, 0);
+  expectTrue("lastError after missing database", lastError().length > 0);
+
+  // Unroutable host with a tight timeout must fail fast-ish.
+  const unreach = await connect(
+    "host=192.0.2.1 port=1 dbname=cp3_test user=" + user() +
+    " connect_timeout=1"
+  );
+  expectNumber("connect to an unroutable host fails", unreach, 0);
+
+  // Defensive handle values.
+  expectFalse("isOpen(0)", isOpen(0));
+  expectNumber("status(0)", status(0), -1);
+  expectString("connectionError(0)", connectionError(0), "");
+  expectNumber("serverVersion(0)", serverVersion(0), -1);
+
+  // isOpen on a closed handle.
+  close(conn);
+  expectFalse("isOpen after close", isOpen(conn));
+  expectNumber("status after close", status(conn), -1);
+
+  // Double close is a no-op.
+  close(conn);
+  expectFalse("double close is a no-op", isOpen(conn));
+
+  return undefined;
+}

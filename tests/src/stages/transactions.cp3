@@ -1,0 +1,86 @@
+// 06-transactions.cp3 - explicit transaction control and the transaction()
+// helper.
+
+import {
+  connect,
+  close,
+  query,
+  transaction,
+} from "../../../src/client.cp3";
+import {
+  clear,
+  resultOk,
+  valueByName,
+} from "../../../src/result.cp3";
+import { val } from "../support/fixtures.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("transactions");
+
+  const conn = await connect(clientConninfo());
+
+  await query(conn, "drop table if exists cp3_test_tx");
+  await query(conn, "create table cp3_test_tx (id int primary key, note text)");
+
+  await query(conn, "begin");
+  await query(conn, "insert into cp3_test_tx (id, note) values (1, 'rolled back')");
+  await query(conn, "rollback");
+
+  const r1 = await query(conn, "select count(*)::int as n from cp3_test_tx");
+  expectString("rollback removed the insert", valueByName(r1, 0, "n"), "0");
+  clear(r1);
+
+  await query(conn, "begin");
+  await query(conn, "insert into cp3_test_tx (id, note) values (1, 'committed')");
+  await query(conn, "commit");
+
+  const r2 = await query(conn, "select note from cp3_test_tx where id = 1");
+  expectString("commit kept the insert", valueByName(r2, 0, "note"), "committed");
+  clear(r2);
+
+  // Error inside an explicit transaction, then rollback.
+  await query(conn, "begin");
+  await query(conn, "insert into cp3_test_tx (id, note) values (2, 'first')");
+  const dup = await query(
+    conn, "insert into cp3_test_tx (id, note) values (2, 'duplicate')"
+  );
+  expectFalse("duplicate key rejects", resultOk(dup));
+  clear(dup);
+  await query(conn, "rollback");
+
+  const r3 = await query(conn, "select count(*)::int as n from cp3_test_tx");
+  expectString("rollback after error removed the row",
+                 valueByName(r3, 0, "n"), "1");
+  clear(r3);
+
+  // transaction(): success path commits.
+  await transaction(conn, async (conn: number): Promise<undefined> => {
+    await query(conn, "insert into cp3_test_tx (id, note) values (3, 'helper')");
+    return undefined;
+  });
+  const r4 = await query(conn, "select note from cp3_test_tx where id = 3");
+  expectString("transaction() committed", valueByName(r4, 0, "note"), "helper");
+  clear(r4);
+
+  // transaction(): throw path rolls back.
+  let helperThrew = false;
+  try {
+    await transaction(conn, async (conn: number): Promise<undefined> => {
+      await query(conn, "insert into cp3_test_tx (id, note) values (4, 'gone')");
+      throw new Error("boom");
+    });
+  } catch (err) {
+    helperThrew = true;
+  }
+  expectTrue("transaction() re-throws", helperThrew);
+  const r5 = await query(conn, "select count(*)::int as n from cp3_test_tx where id = 4");
+  expectString("transaction() rolled back on throw",
+                 valueByName(r5, 0, "n"), "0");
+  clear(r5);
+
+  await query(conn, "drop table cp3_test_tx");
+  close(conn);
+  return undefined;
+}

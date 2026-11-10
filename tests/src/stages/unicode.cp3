@@ -1,0 +1,51 @@
+// 07-unicode.cp3 - Unicode and large values over the extended protocol.
+
+import {
+  connect,
+  close,
+  queryParams,
+} from "../../../src/client.cp3";
+import { valueByName, clear } from "../../../src/result.cp3";
+import { textParam } from "../../../src/params.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("Unicode and larger values");
+
+  const conn = await connect(clientConninfo());
+
+  const multiline = "line1\nline2\ttab ä¸–ç•Œ ðŸ˜";
+  const r1 = await queryParams(conn, "select $1::text as value",
+                               textParam(multiline));
+  expectString("multiline Unicode round-trips",
+                 valueByName(r1, 0, "value"), multiline);
+  clear(r1);
+
+  let big = "";
+  for (let i = 0; i < 1024; i = i + 1) {
+    big = big + "0123456789";
+  }
+
+  const r2 = await queryParams(
+    conn,
+    "select length($1::text)::int as n, $1::text as value",
+    textParam(big)
+  );
+  expectString("large text length is 10240",
+                 valueByName(r2, 0, "n"), "10240");
+  expectString("large text round-trips",
+                 valueByName(r2, 0, "value"), big);
+  clear(r2);
+
+  // Parameter bytes with NUL-free but markup-heavy content.
+  const tricky = "a\\b\"c'd; \n with tabs\t and 'quotes'";
+  const r3 = await queryParams(conn, "select $1::text as value",
+                               textParam(tricky));
+  expectString("markup-heavy parameter round-trips",
+                 valueByName(r3, 0, "value"), tricky);
+  clear(r3);
+
+  close(conn);
+  return undefined;
+}

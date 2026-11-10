@@ -1,0 +1,121 @@
+// 04-params.cp3 - parameterized queries: text, int, real, bool, nil,
+// injection-shaped data, Unicode, prepared statements.
+
+import {
+  connect,
+  close,
+  queryParams,
+  queryParamsBinary,
+  prepare,
+  executePrepared,
+  executePreparedBinary,
+} from "../../../src/client.cp3";
+import {
+  clear,
+  valueBinary,
+  isNullByName,
+} from "../../../src/result.cp3";
+import {
+  textParam,
+  intParam,
+  realParam,
+  boolParam,
+  nilParam,
+  pack2,
+  pack3,
+} from "../../../src/params.cp3";
+import {
+  ITEMS_TABLE,
+  countRows,
+  createItemsTable,
+  insertItems,
+  val,
+} from "../support/fixtures.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("parameterized queries");
+
+  const conn = await connect(clientConninfo());
+
+  await createItemsTable(conn);
+  await insertItems(conn);
+
+  const r1 = await queryParams(conn, "select $1::text as value",
+                               textParam("hello"));
+  expectString("text parameter round-trips", val(r1, 0, "value"), "hello");
+
+  const r2 = await queryParams(conn,
+    "select $1::text || '-' || $2::text as value",
+    pack2(textParam("left"), textParam("right")));
+  expectString("two parameters", val(r2, 0, "value"), "left-right");
+
+  const r3 = await queryParams(conn,
+    "select $1::int + $2::int + $3::int as total",
+    pack3(intParam(10), intParam(20), intParam(12)));
+  expectString("int parameters sum", val(r3, 0, "total"), "42");
+
+  const rReal = await queryParams(conn, "select $1::float8 as v",
+                                   realParam(2.5));
+  expectString("float parameter round-trips", val(rReal, 0, "v"), "2.5");
+
+  const rBool = await queryParams(conn, "select $1::bool as v",
+                                  boolParam(true));
+  expectString("bool parameter round-trips", val(rBool, 0, "v"), "true");
+
+  const rNull = await queryParams(conn, "select $1::text as v",
+                                  nilParam());
+  expectTrue("nil() parameter is SQL NULL", isNullByName(rNull, 0, "v"));
+
+  // Injection-shaped input stays data.
+  const injected = "'; drop table cp3_test_items; --";
+  const rInjected = await queryParams(conn,
+    "select $1::text as value", textParam(injected));
+  expectString("parameter is data, not SQL",
+                 val(rInjected, 0, "value"), injected);
+  expectString("table survived injection-shaped parameter",
+                 await countRows(conn, ITEMS_TABLE), "3");
+
+  // Unicode parameter round-trips.
+  const unicode = "hÃƒÂ©llo Ã¤Â¸â€“Ã§â€¢Å’ Ã°Å¸ÂËœ";
+  const rUnicode = await queryParams(conn,
+    "select $1::text as value", textParam(unicode));
+  expectString("Unicode parameter round-trips",
+                 val(rUnicode, 0, "value"), unicode);
+
+  // Empty string parameter, distinct from NULL.
+  const rEmpty = await queryParams(conn, "select $1::text as v",
+                                   textParam(""));
+  expectString("empty string parameter", val(rEmpty, 0, "v"), "");
+  expectFalse("empty string parameter is not NULL",
+                isNullByName(rEmpty, 0, "v"));
+
+  // Binary-format params round-trip via binary path.
+  const rBin = await queryParamsBinary(conn, "select $1::int4 as v",
+                                       intParam(42));
+  expectString("binary int4 param", valueBinary(rBin, 0, 0), "42");
+  clear(rBin);
+
+  // Prepared statement: prepare once, execute twice (same connection).
+  const ok = await prepare(conn, "cp3_test_prepared", "select $1::int as n", 1);
+  expectTrue("prepare succeeds", ok);
+  const p1 = await executePrepared(conn, "cp3_test_prepared", intParam(1));
+  const p2 = await executePrepared(conn, "cp3_test_prepared", intParam(2));
+  expectString("prepared statement first call", val(p1, 0, "n"), "1");
+  expectString("prepared statement second call", val(p2, 0, "n"), "2");
+  clear(p1);
+  clear(p2);
+
+  // executePrepared without prior prepare returns 0.
+  const unprepared = await executePrepared(conn, "cp3_missing_name", intParam(1));
+  expectNumber("execute without prepare returns 0", unprepared, 0);
+
+  // Binary prepared execution works too.
+  const pBin = await executePreparedBinary(conn, "cp3_test_prepared", intParam(7));
+  expectString("prepared binary execution", valueBinary(pBin, 0, 0), "7");
+  clear(pBin);
+
+  close(conn);
+  return undefined;
+}

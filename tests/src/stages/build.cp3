@@ -1,0 +1,29 @@
+// 00-build.cp3 - libpq build information (no server needed).
+
+import {
+  CONNECTION_OK,
+  CONNECTION_BAD,
+  RESULT_COMMAND_OK,
+  RESULT_TUPLES_OK,
+  RESULT_FATAL_ERROR,
+  RESULT_PIPELINE_SYNC,
+  RESULT_PIPELINE_ABORTED,
+  RESULT_EMPTY_QUERY,
+  libVersion,
+} from "../../../src/index.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("libpq build information");
+
+  expectAtLeast("libVersion reports a real libpq", libVersion(), 90000);
+  expectNumber("CONNECTION_OK is 0", CONNECTION_OK, 0);
+  expectNumber("CONNECTION_BAD is 1", CONNECTION_BAD, 1);
+  expectNumber("RESULT_EMPTY_QUERY is 0", RESULT_EMPTY_QUERY, 0);
+  expectNumber("RESULT_COMMAND_OK is 1", RESULT_COMMAND_OK, 1);
+  expectNumber("RESULT_TUPLES_OK is 2", RESULT_TUPLES_OK, 2);
+  expectNumber("RESULT_FATAL_ERROR is 7", RESULT_FATAL_ERROR, 7);
+  expectNumber("RESULT_PIPELINE_SYNC is 10", RESULT_PIPELINE_SYNC, 10);
+  expectNumber("RESULT_PIPELINE_ABORTED is 11", RESULT_PIPELINE_ABORTED, 11);
+  return undefined;
+}

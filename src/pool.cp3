@@ -1,0 +1,260 @@
+// pool.cp3 - connection pool free functions (node-pg Pool without the
+// checked-out-client API).
+//
+//   const pool = poolCreate("host=127.0.0.1 port=55432 user=postgres", 10, 0);
+//   const res = await poolQuery(pool, "select 1");
+//   ...
+//   await poolEnd(pool);
+//
+// Known limitation of this build of cp3: only ONE pool per process is
+// supported (the pool id is always 1). The compiler cannot store the
+// per-pool state this module needs in general form yet.
+//
+// Behavior:
+//   * up to `max` live connections (0 -> 10);
+//   * when all are busy, acquisitions wait in FIFO order for the next
+//     release; acquisitions past `connectionTimeoutMillis` give up and
+//     return 0 (0 -> wait forever);
+//   * released connections are reused while idle;
+//   * poolEnd() stops new acquisitions, closes idle connections and
+//     resolves once in-flight work drains.
+
+import time from "std/time";
+import { Queue } from "std/collections";
+import {
+  connect,
+  close,
+  query,
+  queryParams,
+  queryParamsBinary,
+  execute,
+  executeParams,
+} from "./client.cp3";
+
+let poolConninfo = "";
+let poolMax = 10;
+let poolTimeout = 0;
+let poolTotal = 0;
+let poolActive = 0;
+let poolEnded = false;
+
+const idle = new Queue<number>();
+
+// Create (or reconfigure) the singleton pool. `max` is the maximum live
+// connections (0 -> 10); `connectionTimeoutMillis` fails waiting
+// acquisitions after that many ms (0 -> wait forever). Returns the pool
+// id (always 1).
+export function poolCreate(conninfoString: string, max: number,
+                           connectionTimeoutMillis: number): number {
+  poolConninfo = conninfoString;
+  poolMax = max !== 0 ? max : 10;
+  poolTimeout = connectionTimeoutMillis;
+  poolEnded = false;
+  return 1;
+}
+
+export function poolSize(poolId: number): number {
+  return poolTotal;
+}
+
+export function poolPending(poolId: number): number {
+  return poolActive;
+}
+
+function dequeueIdle(): number {
+  const cached = idle.dequeue();
+  if (cached === undefined) {
+    return -1;
+  }
+  return cached!;
+}
+
+// Acquire a connection from the pool. Resolves with a handle, or 0 when
+// the pool ended or the acquisition timed out. Pair with poolRelease().
+export async function poolAcquire(poolId: number): Promise<number> {
+  if (poolEnded) {
+    return 0;
+  }
+
+  // Fast path: an idle connection is available.
+  const cached = dequeueIdle();
+  if (cached !== -1) {
+    poolActive = poolActive + 1;
+    return cached;
+  }
+
+  // Open a new one if below the cap.
+  if (poolTotal < poolMax) {
+    poolTotal = poolTotal + 1;
+    const handle = await connect(poolConninfo);
+    if (handle === 0) {
+      poolTotal = poolTotal - 1;
+      return 0;
+    }
+    poolActive = poolActive + 1;
+    return handle;
+  }
+
+  // Wait for the next release or the timeout. The claim and the cap check
+  // happen synchronously inside one coroutine step, so two waiters can't
+  // grab the same slot. Poll on a short timer: the event loop's timers are
+  // the only reliable wake source on this build.
+  let watch = time.stopwatch();
+  if (poolTimeout > 0) {
+    watch.start();
+  }
+  while (true) {
+    if (poolEnded) {
+      return 0;
+    }
+    await sleep(5);
+
+    const retry = dequeueIdle();
+    if (retry !== -1) {
+      poolActive = poolActive + 1;
+      return retry;
+    }
+    if (poolTotal < poolMax) {
+      poolTotal = poolTotal + 1;
+      const handle = await connect(poolConninfo);
+      if (handle === 0) {
+        poolTotal = poolTotal - 1;
+        return 0;
+      }
+      poolActive = poolActive + 1;
+      return handle;
+    }
+    if (poolTimeout > 0 && watch.elapsed() >= poolTimeout) {
+      return 0;
+    }
+  }
+
+  // Unreachable; the loop only exits via return. Present so the
+  // compiler accepts the ending.
+  return 0;
+}
+
+// Release a connection previously acquired with poolAcquire().
+export async function poolRelease(poolId: number, handle: number): Promise<undefined> {
+  poolActive = poolActive - 1;
+
+  if (poolEnded) {
+    poolTotal = poolTotal - 1;
+    close(handle);
+    return undefined;
+  }
+
+  idle.enqueue(handle);
+  return undefined;
+}
+
+// Run a simple-protocol query on the next available pooled connection.
+// Returns a result handle, or 0 on failure.
+export async function poolQuery(poolId: number, sql: string): Promise<number> {
+  return await poolRunQuery(poolId, sql, "", 0);
+}
+
+// Run an extended-protocol query (packed params) on a pooled connection.
+export async function poolQueryParams(poolId: number, sql: string,
+                                      packed: string): Promise<number> {
+  return await poolRunQuery(poolId, sql, packed, 0);
+}
+
+// Run an extended-protocol query with a binary result format.
+export async function poolQueryParamsBinary(poolId: number, sql: string,
+                                            packed: string): Promise<number> {
+  return await poolRunQuery(poolId, sql, packed, 1);
+}
+
+// Run a simple-protocol DDL/DML statement; returns the affected row count,
+// or -1 on failure.
+export async function poolExecute(poolId: number, sql: string): Promise<number> {
+  return await poolRunExecute(poolId, sql, "");
+}
+
+// Run an extended-protocol DDL/DML statement; returns the affected row
+// count, or -1 on failure.
+export async function poolExecuteParams(poolId: number, sql: string,
+                                        packed: string): Promise<number> {
+  return await poolRunExecute(poolId, sql, packed);
+}
+
+async function poolRunQuery(poolId: number, sql: string, packed: string,
+                            binary: number): Promise<number> {
+  const handle = await poolAcquire(poolId);
+  if (handle === 0) {
+    return 0;
+  }
+  let res = 0;
+  let failed = false;
+  let errorMessage = "unknown error";
+  try {
+    if (packed.length === 0) {
+      res = await query(handle, sql);
+    } else if (binary === 1) {
+      res = await queryParamsBinary(handle, sql, packed);
+    } else {
+      res = await queryParams(handle, sql, packed);
+    }
+  } catch (err) {
+    failed = true;
+    errorMessage = err.message;
+  }
+  await poolRelease(poolId, handle);
+  if (failed) {
+    throw new Error(errorMessage);
+  }
+  return res;
+}
+
+async function poolRunExecute(poolId: number, sql: string,
+                              packed: string): Promise<number> {
+  const handle = await poolAcquire(poolId);
+  if (handle === 0) {
+    return -1;
+  }
+  let res = -1;
+  let failed = false;
+  let errorMessage = "unknown error";
+  try {
+    if (packed.length === 0) {
+      res = await execute(handle, sql);
+    } else {
+      res = await executeParams(handle, sql, packed);
+    }
+  } catch (err) {
+    failed = true;
+    errorMessage = err.message;
+  }
+  await poolRelease(poolId, handle);
+  if (failed) {
+    throw new Error(errorMessage);
+  }
+  return res;
+}
+
+// Close all idle connections and resolve once in-flight work drains.
+export async function poolEnd(poolId: number): Promise<undefined> {
+  poolEnded = true;
+
+  // Close everything idle.
+  while (true) {
+    const cached = dequeueIdle();
+    if (cached === -1) {
+      break;
+    }
+    poolTotal = poolTotal - 1;
+    close(cached);
+  }
+
+  // Wait for the last in-flight connection to be released (bounded).
+  let watch = time.stopwatch();
+  watch.start();
+  while (poolActive > 0) {
+    if (watch.elapsed() >= 10000) {
+      return undefined;
+    }
+    await sleep(5);
+  }
+  return undefined;
+}

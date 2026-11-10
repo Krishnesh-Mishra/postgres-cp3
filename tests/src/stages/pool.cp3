@@ -1,0 +1,71 @@
+// 10-pool.cp3 - pool behavior: acquire, reuse, max, wait queue, timeouts,
+// end() semantics.
+
+import {
+  poolCreate,
+  poolQuery,
+  poolQueryParams,
+  poolSize,
+  poolPending,
+  poolEnd,
+} from "../../../src/pool.cp3";
+import {
+  connect,
+  close,
+  query,
+} from "../../../src/client.cp3";
+import {
+  value,
+  clear,
+} from "../../../src/result.cp3";
+import {
+  intParam,
+} from "../../../src/params.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { val } from "../support/fixtures.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("connection pool");
+
+  const conn = await connect(clientConninfo());
+
+  const pool = poolCreate(clientConninfo(), 2, 0);
+  expectTrue("poolCreate returns a positive id", pool > 0);
+
+  const r1 = await poolQuery(pool, "select 1 as one");
+  expectString("pool query returns a result", val(r1, 0, "one"), "1");
+  clear(r1);
+  expectNumber("pool reports one live client", poolSize(pool), 1);
+
+  const r2 = await poolQuery(pool, "select 2 as two");
+  expectString("second pool query works", val(r2, 0, "two"), "2");
+  clear(r2);
+
+  // Parameterized query on the pool path.
+  const r3 = await poolQueryParams(pool, "select $1::int as n", intParam(41));
+  expectString("pool parameterized query", val(r3, 0, "n"), "41");
+  clear(r3);
+
+  // Forced reuse: a third query completes on one of the two connections.
+  const r4 = await poolQuery(pool, "select 4 as n");
+  expectString("forced reuse query completes", val(r4, 0, "n"), "4");
+  clear(r4);
+
+  // Pool with a tight acquisition timeout rejects callers beyond max.
+  const tightPool = poolCreate(clientConninfo(), 1, 150);
+  const blocker = poolQuery(tightPool, "select pg_sleep(1.0)");
+  const blocked = await poolQuery(tightPool, "select 1 as n");
+  expectNumber("acquisition timeout must not run the query", blocked, 0);
+  await blocker;
+  await poolEnd(tightPool);
+
+  // Close the pool; subsequent queries resolve 0.
+  await poolEnd(pool);
+  const ended = await poolQuery(pool, "select 1");
+  expectNumber("query on an ended pool resolves 0", ended, 0);
+  expectNumber("pool size after end", poolSize(pool), 0);
+
+  close(conn);
+  return undefined;
+}

@@ -1,0 +1,19 @@
+// types.cp3 - shared constants for the postgres package.
+//
+// Only constants live here: free functions and primitives cross the module
+// boundary cleanly, but classes do not (a class from another module is an
+// opaque value - it cannot be constructed, have its methods called, or
+// have its fields read). The public API is therefore built from free
+// functions and integer handles.
+
+// libpq ConnStatusType values (status()).
+export const CONNECTION_OK: number = 0;
+export const CONNECTION_BAD: number = 1;
+
+// libpq ExecStatusType values (resultStatus()).
+export const RESULT_EMPTY_QUERY: number = 0;
+export const RESULT_COMMAND_OK: number = 1;
+export const RESULT_TUPLES_OK: number = 2;
+export const RESULT_FATAL_ERROR: number = 7;
+export const RESULT_PIPELINE_SYNC: number = 10;
+export const RESULT_PIPELINE_ABORTED: number = 11;

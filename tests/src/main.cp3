@@ -1,9 +1,9 @@
-// postgres package test suite.
+// postgres package - async test suite orchestrator.
 //
 // Run from the tests/ directory:
 //   cp3 run src/main.cp3
 //
-// The suite expects a running PostgreSQL server. Configuration is read from:
+// Configuration (same as the previous single-file suite):
 //   CP3_PG_HOST      (default 127.0.0.1)
 //   CP3_PG_PORT      (default 55432)
 //   CP3_PG_DB        (default cp3_test)
@@ -11,679 +11,92 @@
 //   CP3_PG_PASSWORD  (default empty)
 // or a full libpq conninfo string in CP3_PG_CONNINFO, which wins.
 //
-// Tests create and drop their own tables. They do not touch other schemas.
+// The suite is organized as a pipeline of stages, one module per stage,
+// executed in order. Stages that need a live server open their own
+// connections. A failing stage does not stop the pipeline.
 
 import console from "std/console";
-import { env } from "std/env";
 import process from "std/process";
+
+import { conninfoStringOverride, clientConninfo, host, port, database, user } from "./support/env.cp3";
+import { passCount, failureCount, fail } from "./support/harness.cp3";
 
 import {
   connect,
-  connectTo,
-  conninfo,
   close,
-  status,
-  isOpen,
-  connectionError,
-  lastError,
-  serverVersion,
-  query,
-  query1,
-  query2,
-  query3,
-  execute,
-  resultStatus,
-  resultError,
-  resultOk,
-  command,
-  affected,
-  rowCount,
-  fieldCount,
-  columnName,
-  columnIndex,
-  value,
-  valueByName,
-  isNull,
-  isNullByName,
-  clear,
-  escapeLiteral,
-  escapeIdentifier,
-  libVersion,
-  CONNECTION_OK,
-  RESULT_COMMAND_OK,
-  RESULT_TUPLES_OK,
-  RESULT_FATAL_ERROR
-} from "../../src/index.cp3";
+} from "../../src/client.cp3";
 
-// ---------------------------------------------------------------------------
-// Tiny assertion harness
-// ---------------------------------------------------------------------------
+import { run as build } from "./stages/build.cp3";
+import { run as conninfoStage } from "./stages/conninfo.cp3";
+import { run as connectStage } from "./stages/connect.cp3";
+import { run as resultsStage } from "./stages/results.cp3";
+import { run as paramsStage } from "./stages/params.cp3";
+import { run as dmlStage } from "./stages/dml.cp3";
+import { run as transactionsStage } from "./stages/transactions.cp3";
+import { run as unicodeStage } from "./stages/unicode.cp3";
+import { run as escapesStage } from "./stages/escapes.cp3";
+import { run as handlesStage } from "./stages/handles.cp3";
+import { run as poolStage } from "./stages/pool.cp3";
+import { run as cancelStage } from "./stages/cancel.cp3";
 
-let passed = 0;
-let failed = 0;
-
-function section(name: string): void {
+export function printSummary(): undefined {
   console.log("");
-  console.log("== " + name + " ==");
-}
-
-function ok(name: string): void {
-  passed = passed + 1;
-  console.log("ok - " + name);
-}
-
-function fail(name: string, detail: string): void {
-  failed = failed + 1;
-  if (detail.length > 0) {
-    console.log("not ok - " + name + " (" + detail + ")");
+  console.log("passed: " + passCount().toString());
+  console.log("failed: " + failureCount().toString());
+  if (failureCount() === 0) {
+    console.log("RESULT: PASS");
   } else {
-    console.log("not ok - " + name);
+    console.log("RESULT: FAIL");
+  }
+  return undefined;
+}
+
+export async function runStage(name: string,
+                               stage: () => Promise<undefined>): Promise<undefined> {
+  try {
+    await stage();
+    return undefined;
+  } catch (err) {
+    fail(name, err.message);
+    return undefined;
   }
 }
 
-function expectTrue(name: string, condition: boolean): void {
-  if (condition) {
-    ok(name);
-  } else {
-    fail(name, "expected true");
+async function main(): Promise<undefined> {
+  console.log("postgres cp3 package - async test suite");
+  console.log("server: " + host() + ":" + port().toString() +
+              " db=" + database() + " user=" + user() +
+              (conninfoStringOverride().length > 0 ? " (CP3_PG_CONNINFO)" : ""));
+
+  // Stages that do not need a live server run first.
+  await build();
+  await conninfoStage();
+
+  // Verify the server is reachable before running server-backed stages.
+  const probe = await connect(clientConninfo());
+  if (probe === 0) {
+    fail("connect to the test server", "could not connect");
+    printSummary();
+    process.exit(1);
+    return undefined;
   }
+  close(probe);
+
+  await runStage("connection lifecycle", connectStage);
+  await runStage("SELECT and result metadata", resultsStage);
+  await runStage("parameterized queries", paramsStage);
+  await runStage("DDL and DML", dmlStage);
+  await runStage("transactions", transactionsStage);
+  await runStage("Unicode and larger values", unicodeStage);
+  await runStage("escaping", escapesStage);
+  await runStage("defensive handle behavior", handlesStage);
+  await runStage("connection pool", poolStage);
+  await runStage("cancellation", cancelStage);
+
+  printSummary();
+  process.exit(failureCount() === 0 ? 0 : 1);
+  return undefined;
 }
 
-function expectFalse(name: string, condition: boolean): void {
-  if (!condition) {
-    ok(name);
-  } else {
-    fail(name, "expected false");
-  }
-}
-
-function expectNumber(name: string, actual: number, expected: number): void {
-  if (actual === expected) {
-    ok(name);
-  } else {
-    fail(name, "got " + actual.toString() + ", want " + expected.toString());
-  }
-}
-
-function expectAtLeast(name: string, actual: number, minimum: number): void {
-  if (actual >= minimum) {
-    ok(name);
-  } else {
-    fail(name, "got " + actual.toString() + ", want >= " + minimum.toString());
-  }
-}
-
-function expectString(name: string, actual: string, expected: string): void {
-  if (actual === expected) {
-    ok(name);
-  } else {
-    fail(name, "got '" + actual + "', want '" + expected + "'");
-  }
-}
-
-function expectNonEmpty(name: string, actual: string): void {
-  if (actual.length > 0) {
-    ok(name);
-  } else {
-    fail(name, "expected a non-empty string");
-  }
-}
-
-function expectContains(name: string, actual: string, needle: string): void {
-  if (actual.includes(needle)) {
-    ok(name);
-  } else {
-    fail(name, "'" + actual + "' does not contain '" + needle + "'");
-  }
-}
-
-function expectStartsWith(name: string, actual: string, prefix: string): void {
-  if (actual.startsWith(prefix)) {
-    ok(name);
-  } else {
-    fail(name, "'" + actual + "' does not start with '" + prefix + "'");
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-const host = env.get("CP3_PG_HOST", { default: "127.0.0.1" });
-const port = env.get("CP3_PG_PORT", { default: 55432 });
-const database = env.get("CP3_PG_DB", { default: "cp3_test" });
-const user = env.get("CP3_PG_USER", { default: "postgres" });
-const password = env.get("CP3_PG_PASSWORD", { default: "" });
-const builtInfo = conninfo(host, port, database, user, password);
-const configuredInfo = env.get("CP3_PG_CONNINFO", { default: "" });
-let info = builtInfo;
-if (configuredInfo.length > 0) {
-  info = configuredInfo;
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-function testBuildInfo(): void {
-  section("libpq build information");
-  expectAtLeast("libVersion reports a real libpq", libVersion(), 90000);
-}
-
-function testConninfo(): void {
-  section("conninfo construction");
-
-  const basic = conninfo("127.0.0.1", 55432, "cp3_test", "postgres", "");
-  expectString(
-    "basic conninfo",
-    basic,
-    "host='127.0.0.1' port=55432 dbname='cp3_test' user='postgres' password=''"
-  );
-
-  const quoted = conninfo("host with space", 5432, "db name", "user'name",
-                          "pass\\word");
-  expectContains("quoted host", quoted, "host='host with space'");
-  expectContains("quoted database", quoted, "dbname='db name'");
-  expectContains("quoted user", quoted, "user='user\\'name'");
-  expectContains("quoted password", quoted, "password='pass\\\\word'");
-}
-
-function testConnectionLifecycle(conn: number): void {
-  section("connection lifecycle");
-
-  expectNumber("status is CONNECTION_OK", status(conn), CONNECTION_OK);
-  expectTrue("isOpen on a live connection", isOpen(conn));
-  expectString("connectionError on a live connection", connectionError(conn), "");
-  expectAtLeast("serverVersion reports a server version", serverVersion(conn), 160000);
-
-  const bad = connect("host=127.0.0.1 port=1 dbname=cp3_test user=postgres connect_timeout=2");
-  expectNumber("invalid connect returns 0", bad, 0);
-  expectNonEmpty("lastError after an invalid connect", lastError());
-
-  expectFalse("isOpen(0)", isOpen(0));
-  expectNumber("status(0)", status(0), -1);
-  expectString("connectionError(0)", connectionError(0), "");
-  expectNumber("serverVersion(0)", serverVersion(0), -1);
-}
-
-function testSelectAndMetadata(conn: number): void {
-  section("SELECT and result metadata");
-
-  const res = query(
-    conn,
-    "select 42::int as answer, 'hello'::text as greeting, null::text as missing"
-  );
-  expectTrue("query returned a result handle", res > 0);
-
-  if (res > 0) {
-    expectTrue("resultOk", resultOk(res));
-    expectNumber("resultStatus is TUPLES_OK", resultStatus(res), RESULT_TUPLES_OK);
-    expectString("resultError is empty", resultError(res), "");
-    expectNumber("rowCount", rowCount(res), 1);
-    expectNumber("fieldCount", fieldCount(res), 3);
-
-    expectString("columnName(0)", columnName(res, 0), "answer");
-    expectString("columnName(1)", columnName(res, 1), "greeting");
-    expectString("columnName(2)", columnName(res, 2), "missing");
-    expectString("columnName out of range", columnName(res, 9), "");
-
-    expectNumber("columnIndex(answer)", columnIndex(res, "answer"), 0);
-    expectNumber("columnIndex(greeting)", columnIndex(res, "greeting"), 1);
-    expectNumber("columnIndex(unknown)", columnIndex(res, "nope"), -1);
-
-    expectString("value(0,0)", value(res, 0, 0), "42");
-    expectString("value(0,1)", value(res, 0, 1), "hello");
-    expectString("valueByName(answer)", valueByName(res, 0, "answer"), "42");
-    expectString("valueByName(greeting)", valueByName(res, 0, "greeting"), "hello");
-    expectString("value out of range", value(res, 9, 9), "");
-
-    expectFalse("isNull(answer)", isNull(res, 0, 0));
-    expectFalse("isNull(greeting)", isNull(res, 0, 1));
-    expectTrue("isNull(missing)", isNull(res, 0, 2));
-    expectTrue("isNullByName(missing)", isNullByName(res, 0, "missing"));
-    expectString("SQL NULL value is empty", value(res, 0, 2), "");
-
-    expectStartsWith("SELECT command tag", command(res), "SELECT");
-    expectNumber("affected on SELECT", affected(res), 0);
-
-    clear(res);
-    expectNumber("rowCount after clear", rowCount(res), -1);
-    expectNumber("fieldCount after clear", fieldCount(res), -1);
-    expectNumber("resultStatus after clear", resultStatus(res), -1);
-    expectString("resultError after clear", resultError(res), "");
-    expectFalse("resultOk after clear", resultOk(res));
-    expectString("value after clear", value(res, 0, 0), "");
-    expectString("columnName after clear", columnName(res, 0), "");
-  }
-}
-
-function testNulls(conn: number): void {
-  section("NULL versus empty string");
-
-  const res = query(conn, "select null::text as a, ''::text as b, 'x'::text as c");
-  expectTrue("NULL test query returned", res > 0);
-
-  if (res > 0) {
-    expectTrue("NULL is null", isNull(res, 0, 0));
-    expectFalse("empty string is not null", isNull(res, 0, 1));
-    expectFalse("value is not null", isNull(res, 0, 2));
-
-    expectString("NULL value is empty", value(res, 0, 0), "");
-    expectString("empty string value is empty", value(res, 0, 1), "");
-    expectString("non-null value", value(res, 0, 2), "x");
-
-    expectTrue("NULL by name", isNullByName(res, 0, "a"));
-    expectFalse("empty string by name", isNullByName(res, 0, "b"));
-    expectFalse("non-null by name", isNullByName(res, 0, "c"));
-
-    clear(res);
-  }
-}
-
-function testDdlAndDml(conn: number): void {
-  section("DDL and DML");
-
-  execute(conn, "drop table if exists cp3_test_items");
-
-  let res = query(
-    conn,
-    "create table cp3_test_items (" +
-      "id serial primary key, " +
-      "name text not null, " +
-      "qty int not null default 0)"
-  );
-  expectTrue("CREATE TABLE returned a result", res > 0);
-  if (res > 0) {
-    expectTrue("CREATE TABLE ok", resultOk(res));
-    expectNumber("CREATE TABLE status", resultStatus(res), RESULT_COMMAND_OK);
-    expectNumber("CREATE TABLE rowCount", rowCount(res), 0);
-    expectNumber("CREATE TABLE fieldCount", fieldCount(res), 0);
-    expectString("CREATE TABLE command tag", command(res), "CREATE TABLE");
-    clear(res);
-  }
-
-  const inserted = execute(
-    conn,
-    "insert into cp3_test_items (name, qty) values " +
-      "('alpha', 1), ('beta', 2), ('gamma', 3)"
-  );
-  expectNumber("execute INSERT affected", inserted, 3);
-
-  res = query(conn, "select id, name, qty from cp3_test_items order by id");
-  expectTrue("SELECT after INSERT returned", res > 0);
-  if (res > 0) {
-    expectNumber("SELECT after INSERT rowCount", rowCount(res), 3);
-    expectNumber("SELECT after INSERT fieldCount", fieldCount(res), 3);
-    expectString("row 0 name", valueByName(res, 0, "name"), "alpha");
-    expectString("row 1 name", valueByName(res, 1, "name"), "beta");
-    expectString("row 2 name", valueByName(res, 2, "name"), "gamma");
-    expectString("row 0 qty", value(res, 0, 2), "1");
-    expectString("row 2 qty", value(res, 2, 2), "3");
-    clear(res);
-  }
-
-  const updated = execute(
-    conn,
-    "update cp3_test_items set qty = qty + 10 where name in ('alpha', 'gamma')"
-  );
-  expectNumber("execute UPDATE affected", updated, 2);
-
-  const deleted = execute(conn, "delete from cp3_test_items where name = 'beta'");
-  expectNumber("execute DELETE affected", deleted, 1);
-
-  res = query(conn, "select count(*)::int as remaining from cp3_test_items");
-  expectTrue("count query returned", res > 0);
-  if (res > 0) {
-    expectString("remaining row count", valueByName(res, 0, "remaining"), "2");
-    clear(res);
-  }
-
-  res = query(conn, "insert into cp3_test_items (name, qty) values ('delta', 4)");
-  expectTrue("INSERT returned a result", res > 0);
-  if (res > 0) {
-    expectString("INSERT command tag", command(res), "INSERT 0 1");
-    expectNumber("INSERT affected", affected(res), 1);
-    clear(res);
-  }
-
-  res = query(conn, "update cp3_test_items set qty = qty + 1 where name = 'delta'");
-  expectTrue("UPDATE returned a result", res > 0);
-  if (res > 0) {
-    expectString("UPDATE command tag", command(res), "UPDATE 1");
-    expectNumber("UPDATE affected", affected(res), 1);
-    clear(res);
-  }
-
-  res = query(conn, "delete from cp3_test_items where name = 'delta'");
-  expectTrue("DELETE returned a result", res > 0);
-  if (res > 0) {
-    expectString("DELETE command tag", command(res), "DELETE 1");
-    expectNumber("DELETE affected", affected(res), 1);
-    clear(res);
-  }
-
-  expectNumber("execute SELECT returns 0", execute(conn, "select * from cp3_test_items"), 0);
-  expectNumber("execute invalid SQL returns -1", execute(conn, "select * from cp3_missing_table"), -1);
-}
-
-function testParameters(conn: number): void {
-  section("parameterized queries");
-
-  let res = query1(conn, "select $1::text as value", "hello");
-  expectTrue("query1 returned a result", res > 0);
-  if (res > 0) {
-    expectString("query1 value", valueByName(res, 0, "value"), "hello");
-    clear(res);
-  }
-
-  res = query2(conn, "select $1::text || '-' || $2::text as value", "left", "right");
-  expectTrue("query2 returned a result", res > 0);
-  if (res > 0) {
-    expectString("query2 value", valueByName(res, 0, "value"), "left-right");
-    clear(res);
-  }
-
-  res = query3(conn, "select $1::int + $2::int + $3::int as total", "10", "20", "12");
-  expectTrue("query3 returned a result", res > 0);
-  if (res > 0) {
-    expectString("query3 total", valueByName(res, 0, "total"), "42");
-    clear(res);
-  }
-
-  const injected = "'; drop table cp3_test_items; --";
-  res = query1(conn, "select $1::text as value", injected);
-  expectTrue("injection-shaped parameter returned", res > 0);
-  if (res > 0) {
-    expectString("parameter is data, not SQL", valueByName(res, 0, "value"), injected);
-    clear(res);
-  }
-
-  res = query(conn, "select count(*)::int as n from cp3_test_items");
-  expectTrue("table survived injection-shaped parameter", res > 0);
-  if (res > 0) {
-    expectTrue("table still exists", resultOk(res));
-    clear(res);
-  }
-
-  res = query1(conn, "select $1::text as value", "héllo 世界 🐘");
-  expectTrue("Unicode parameter returned", res > 0);
-  if (res > 0) {
-    expectString("Unicode parameter round-trip", valueByName(res, 0, "value"),
-                 "héllo 世界 🐘");
-    clear(res);
-  }
-}
-
-function testSqlErrors(conn: number): void {
-  section("SQL errors");
-
-  const res = query(conn, "select * from cp3_missing_table");
-  expectTrue("failing query returned a result", res > 0);
-
-  if (res > 0) {
-    expectFalse("error result is not ok", resultOk(res));
-    expectNumber("error result status", resultStatus(res), RESULT_FATAL_ERROR);
-    expectNonEmpty("error message is present", resultError(res));
-    expectContains("error names the missing relation", resultError(res),
-                   "cp3_missing_table");
-    expectNumber("error rowCount", rowCount(res), 0);
-    expectNumber("error fieldCount", fieldCount(res), 0);
-    expectString("error command tag", command(res), "");
-    expectNumber("error affected", affected(res), 0);
-    clear(res);
-  }
-
-  const syntax = query(conn, "select from");
-  expectTrue("syntax error returned a result", syntax > 0);
-  if (syntax > 0) {
-    expectFalse("syntax error is not ok", resultOk(syntax));
-    expectContains("syntax error message", resultError(syntax), "syntax error");
-    clear(syntax);
-  }
-}
-
-function testEscaping(conn: number): void {
-  section("escaping");
-
-  expectString("escapeLiteral plain", escapeLiteral(conn, "hello"), "'hello'");
-  expectString("escapeLiteral quote", escapeLiteral(conn, "O'Reilly"), "'O''Reilly'");
-  expectString("escapeLiteral empty", escapeLiteral(conn, ""), "''");
-  expectString("escapeIdentifier plain", escapeIdentifier(conn, "items"), "\"items\"");
-  expectString("escapeIdentifier mixed case", escapeIdentifier(conn, "My Table"),
-               "\"My Table\"");
-  expectString("escapeIdentifier embedded quote", escapeIdentifier(conn, "a\"b"),
-               "\"a\"\"b\"");
-  expectString("escapeIdentifier empty", escapeIdentifier(conn, ""), "\"\"");
-
-  expectString("escapeLiteral on invalid connection", escapeLiteral(0, "x"), "");
-  expectString("escapeIdentifier on invalid connection", escapeIdentifier(0, "x"), "");
-
-  const dangerous = "a\\b'c";
-  const literal = escapeLiteral(conn, dangerous);
-  let res = query(conn, "select " + literal + "::text as value");
-  expectTrue("escaped literal query returned", res > 0);
-  if (res > 0) {
-    expectString("escaped literal round-trip", valueByName(res, 0, "value"), dangerous);
-    clear(res);
-  }
-
-  const dangerousSql = "'; drop table cp3_test_items; --";
-  const safeLiteral = escapeLiteral(conn, dangerousSql);
-  res = query(conn, "select " + safeLiteral + "::text as value");
-  expectTrue("escaped dangerous literal query returned", res > 0);
-  if (res > 0) {
-    expectString("escaped dangerous literal round-trip",
-                 valueByName(res, 0, "value"), dangerousSql);
-    clear(res);
-  }
-
-  const identifier = escapeIdentifier(conn, "weird name");
-  res = query(conn, "select 1 as " + identifier);
-  expectTrue("escaped identifier query returned", res > 0);
-  if (res > 0) {
-    expectString("escaped identifier column name", columnName(res, 0), "weird name");
-    clear(res);
-  }
-
-  const unicodeIdentifier = escapeIdentifier(conn, "café");
-  res = query(conn, "select 7 as " + unicodeIdentifier);
-  expectTrue("Unicode identifier query returned", res > 0);
-  if (res > 0) {
-    expectString("Unicode identifier column name", columnName(res, 0), "café");
-    clear(res);
-  }
-
-  res = query(conn, "select count(*)::int as n from cp3_test_items");
-  expectTrue("table survived escaped literal", res > 0);
-  if (res > 0) {
-    expectTrue("table still exists after escaping tests", resultOk(res));
-    clear(res);
-  }
-}
-
-function testTransactions(conn: number): void {
-  section("transactions");
-
-  execute(conn, "drop table if exists cp3_test_tx");
-  execute(conn, "create table cp3_test_tx (id int primary key, note text)");
-
-  execute(conn, "begin");
-  execute(conn, "insert into cp3_test_tx (id, note) values (1, 'rolled back')");
-  execute(conn, "rollback");
-
-  let res = query(conn, "select count(*)::int as n from cp3_test_tx");
-  expectTrue("rollback count query returned", res > 0);
-  if (res > 0) {
-    expectString("rollback removed the insert", valueByName(res, 0, "n"), "0");
-    clear(res);
-  }
-
-  execute(conn, "begin");
-  execute(conn, "insert into cp3_test_tx (id, note) values (1, 'committed')");
-  execute(conn, "commit");
-
-  res = query(conn, "select note from cp3_test_tx where id = 1");
-  expectTrue("commit select returned", res > 0);
-  if (res > 0) {
-    expectString("commit kept the insert", valueByName(res, 0, "note"), "committed");
-    clear(res);
-  }
-
-  execute(conn, "begin");
-  execute(conn, "insert into cp3_test_tx (id, note) values (2, 'first')");
-  const duplicate = query(
-    conn,
-    "insert into cp3_test_tx (id, note) values (2, 'duplicate')"
-  );
-  expectTrue("duplicate key returned a result", duplicate > 0);
-  if (duplicate > 0) {
-    expectFalse("duplicate key failed", resultOk(duplicate));
-    expectNonEmpty("duplicate key error", resultError(duplicate));
-    clear(duplicate);
-  }
-  execute(conn, "rollback");
-
-  res = query(conn, "select count(*)::int as n from cp3_test_tx");
-  expectTrue("post-error count query returned", res > 0);
-  if (res > 0) {
-    expectString("rollback after error removed the row", valueByName(res, 0, "n"), "1");
-    clear(res);
-  }
-
-  execute(conn, "drop table cp3_test_tx");
-}
-
-function testEmptyResult(conn: number): void {
-  section("empty result sets");
-
-  const res = query(conn, "select 1::int as x where false");
-  expectTrue("empty SELECT returned a result", res > 0);
-  if (res > 0) {
-    expectTrue("empty SELECT ok", resultOk(res));
-    expectNumber("empty SELECT rowCount", rowCount(res), 0);
-    expectNumber("empty SELECT fieldCount", fieldCount(res), 1);
-    expectString("empty SELECT columnName", columnName(res, 0), "x");
-    expectString("empty SELECT value", value(res, 0, 0), "");
-    clear(res);
-  }
-}
-
-function testUnicodeAndLargeText(conn: number): void {
-  section("Unicode and larger values");
-
-  const text = "line1\nline2\ttab 世界 🐘";
-  let res = query1(conn, "select $1::text as value", text);
-  expectTrue("multiline Unicode query returned", res > 0);
-  if (res > 0) {
-    expectString("multiline Unicode round-trip", valueByName(res, 0, "value"), text);
-    clear(res);
-  }
-
-  let big = "";
-  for (let i = 0; i < 1024; i = i + 1) {
-    big = big + "0123456789";
-  }
-
-  res = query1(conn, "select length($1::text)::int as n, $1::text as value", big);
-  expectTrue("large text query returned", res > 0);
-  if (res > 0) {
-    expectString("large text length", valueByName(res, 0, "n"), "10240");
-    expectString("large text round-trip", valueByName(res, 0, "value"), big);
-    clear(res);
-  }
-}
-
-function testDefensiveHandles(): void {
-  section("defensive handle behavior");
-
-  expectNumber("resultStatus(0)", resultStatus(0), -1);
-  expectString("resultError(0)", resultError(0), "");
-  expectFalse("resultOk(0)", resultOk(0));
-  expectString("command(0)", command(0), "");
-  expectNumber("affected(0)", affected(0), -1);
-  expectNumber("rowCount(0)", rowCount(0), -1);
-  expectNumber("fieldCount(0)", fieldCount(0), -1);
-  expectString("columnName(0,0)", columnName(0, 0), "");
-  expectNumber("columnIndex(0,x)", columnIndex(0, "x"), -1);
-  expectString("value(0,0,0)", value(0, 0, 0), "");
-  expectTrue("isNull(0,0,0)", isNull(0, 0, 0));
-  clear(0);
-  ok("clear(0) is a no-op");
-}
-
-function testConnectTo(): void {
-  section("connectTo");
-
-  const c = connectTo(host, port, database, user, password);
-  expectTrue("connectTo opened a connection", c > 0);
-  if (c > 0) {
-    expectTrue("connectTo connection isOpen", isOpen(c));
-    expectNumber("connectTo status", status(c), CONNECTION_OK);
-    close(c);
-  }
-
-  const bad = connectTo(host, 1, database, user, password);
-  expectNumber("connectTo invalid port returns 0", bad, 0);
-  expectNonEmpty("lastError after connectTo failure", lastError());
-}
-
-function testClose(conninfoText: string): void {
-  section("closing connections");
-
-  const c = connect(conninfoText);
-  expectTrue("second connection opened", c > 0);
-  if (c > 0) {
-    expectTrue("second connection isOpen", isOpen(c));
-    close(c);
-    expectFalse("closed connection isOpen", isOpen(c));
-    expectNumber("closed connection status", status(c), -1);
-    expectString("closed connection error", connectionError(c), "");
-    close(c);
-    ok("double close is a no-op");
-    expectNumber("double close status", status(c), -1);
-  }
-
-  close(0);
-  ok("close(0) is a no-op");
-  expectFalse("isOpen(0) after close(0)", isOpen(0));
-}
-
-// ---------------------------------------------------------------------------
-// Runner
-// ---------------------------------------------------------------------------
-
-console.log("postgres cp3 package test suite");
-console.log("server: " + host + ":" + port.toString() + " db=" + database);
-
-const conn = connect(info);
-if (conn > 0) {
-  testBuildInfo();
-  testConninfo();
-  testConnectionLifecycle(conn);
-  testSelectAndMetadata(conn);
-  testNulls(conn);
-  testDdlAndDml(conn);
-  testParameters(conn);
-  testSqlErrors(conn);
-  testEscaping(conn);
-  testTransactions(conn);
-  testEmptyResult(conn);
-  testUnicodeAndLargeText(conn);
-  testDefensiveHandles();
-  testConnectTo();
-  testClose(info);
-  close(conn);
-} else {
-  fail("connect to the test server", lastError());
-}
-
-console.log("");
-console.log("passed: " + passed.toString());
-console.log("failed: " + failed.toString());
-
-if (failed > 0) {
-  console.log("RESULT: FAIL");
-  process.exit(1);
-} else {
-  console.log("RESULT: PASS");
-}
+// main() always calls process.exit; nothing else handles the result.
+main();

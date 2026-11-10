@@ -1,0 +1,407 @@
+// client.cp3 - connection and query free functions.
+//
+// Cross-module class instances are opaque in this compiler, so the public
+// API is built from free functions over integer handles (the same shape
+// the original beta-one package used). Everything that touches the server
+// is async; pure lookups are synchronous.
+//
+// Ownership:
+//   * connect()/connectTo() return a connection handle (> 0), or 0 on
+//     failure; close() releases it.
+//   * query()/queryParams()/... return a result handle (> 0), or 0 when
+//     libpq produced no result; clear() releases it. A SQL error is still
+//     a result - check resultOk()/resultStatus()/resultError().
+//
+// All I/O is driven by a timer-based poll of libpq's non-blocking status
+// functions (io.pollUntilDone never wakes for TCP-connect-pending or
+// refused sockets on this Windows build). `sleep(5)` parks the coroutine
+// between polls; nothing blocks the event loop.
+
+import time from "std/time";
+import io from "std/io";
+import native "postgres" as pg;
+import { Map } from "std/collections";
+import {
+  CONNECTION_OK,
+  RESULT_FATAL_ERROR,
+  RESULT_PIPELINE_SYNC,
+} from "./types.cp3";
+import { conninfo } from "./conninfo.cp3";
+
+// Result of a poll wait: the last POLL_* code observed, or -1 on deadline.
+const POLL_FAILED = -1;
+
+// ---------------------------------------------------------------------------
+// Connection helpers shared with the pool
+// ---------------------------------------------------------------------------
+
+// Server-side prepared statements created through this module, keyed by
+// "conn:name" -> parameter count (prepared statements are per-connection).
+const preparedStatements = new Map<string, number>();
+
+function preparedKey(conn: number, name: string): string {
+  return conn.toString() + ":" + name;
+}
+
+// ---------------------------------------------------------------------------
+// Connections
+// ---------------------------------------------------------------------------
+
+// Open a connection from a libpq conninfo string (e.g.
+// "host=127.0.0.1 port=5432 dbname=app user=app password=secret").
+// Returns a positive handle, or 0 on failure (see lastError()).
+// A wall-clock deadline of 5 seconds bounds the wait.
+export async function connect(conninfoString: string): Promise<number> {
+  const handle = pg.cp3pg_connect_start(conninfoString);
+  if (handle === 0) {
+    return 0;
+  }
+  const state = await pollUntil(() => pg.cp3pg_connect_progress(handle),
+                                5000);
+  if (state !== 0) {
+    pg.cp3pg_close(handle);
+    return 0;
+  }
+  if (pg.cp3pg_status(handle) !== CONNECTION_OK) {
+    pg.cp3pg_close(handle);
+    return 0;
+  }
+  return handle;
+}
+
+// Open a connection from the common fields. Values are quoted into a
+// conninfo string (spaces, quotes, backslashes survive). Returns a
+// positive handle, or 0 on failure.
+export async function connectTo(host: string, port: number, database: string,
+                                user: string, password: string): Promise<number> {
+  return await connect(conninfo(host, port, database, user, password));
+}
+
+// Close a connection and free its PGconn. Closing 0 or an unknown handle is
+// a no-op.
+export function close(conn: number): undefined {
+  pg.cp3pg_close(conn);
+  return undefined;
+}
+
+// libpq ConnStatusType of a live handle, or -1 for an unknown handle.
+export function status(conn: number): number {
+  return pg.cp3pg_status(conn);
+}
+
+// True when the handle is live and libpq reports CONNECTION_OK.
+export function isOpen(conn: number): boolean {
+  return conn !== 0 && status(conn) === CONNECTION_OK;
+}
+
+// Last libpq error recorded on the connection ("" when there is none).
+export function connectionError(conn: number): string {
+  return pg.cp3pg_error(conn);
+}
+
+// Error from the most recent failed connect on this thread.
+export function lastError(): string {
+  return pg.cp3pg_last_error();
+}
+
+// libpq's server version number, e.g. 170006 for PostgreSQL 17.6. Returns -1
+// for an unknown handle.
+export function serverVersion(conn: number): number {
+  return pg.cp3pg_server_version(conn);
+}
+
+// Build a conninfo string from the common fields (same as conninfo.cp3's
+// conninfo()).
+export function conninfoString(host: string, port: number, database: string,
+                               user: string, password: string): string {
+  return conninfo(host, port, database, user, password);
+}
+
+// Quote a string as a SQL literal (requires a live connection).
+export function escapeLiteral(conn: number, value: string): string {
+  if (conn === 0) {
+    return "";
+  }
+  return pg.cp3pg_escape_literal(conn, value);
+}
+
+// Quote an identifier (requires a live connection).
+export function escapeIdentifier(conn: number, value: string): string {
+  if (conn === 0) {
+    return "";
+  }
+  return pg.cp3pg_escape_identifier(conn, value);
+}
+
+// ---------------------------------------------------------------------------
+// Waiting / draining
+// ---------------------------------------------------------------------------
+
+// Poll a readiness check on a timer instead of the libuv/IOCP reactor.
+// The reactor does not wake for TCP-connect-pending and refused sockets on
+// this build, so every wait would otherwise hang forever. The wall-clock
+// deadline is the guarantee of termination.
+async function pollUntil(check: () => number, deadlineMs: number): Promise<number> {
+  let watch = time.stopwatch();
+  watch.start();
+  while (true) {
+    const state = check();
+    if (state === 0 || state === POLL_FAILED) {
+      return state;
+    }
+    if (watch.elapsed() >= deadlineMs) {
+      return POLL_FAILED;
+    }
+    await sleep(5);
+  }
+  // Unreachable; the loop only exits via return. Present so the
+  // compiler accepts the ending.
+  return POLL_FAILED;
+}
+
+// Wait for an in-flight query on conn to settle, then return the LAST
+// result handle, clearing earlier results. Returns 0 when no result was
+// produced (timed-out query that was cancelled, empty simple query, ...).
+//
+// When `statementTimeout` is > 0, a query that overruns it is cancelled by
+// PQcancel from a dedicated connection; the statement then reports its own
+// error result with SQLSTATE 57014 ("canceling statement due to user
+// request"), which drains out normally. Best-effort: if the cancel itself
+// fails, the statement runs to completion and the watchdog gives up.
+async function drainLast(conn: number, statementTimeout: number): Promise<number> {
+  if (statementTimeout <= 0) {
+    // The reactor wakes reliably for established (live) sockets — unlike
+    // refused/connect-pending ones — so queries on a good connection do
+    // not pay the 5 ms poll latency.
+    await io.pollUntilDone(
+      () => pg.cp3pg_socket(conn),
+      () => pg.cp3pg_query_progress(conn),
+    );
+  } else {
+    let watch = time.stopwatch();
+    watch.start();
+    while (true) {
+      const s = pg.cp3pg_query_progress(conn);
+      if (s === 0 || s === -1) {
+        break;
+      }
+      if (watch.elapsed() >= statementTimeout) {
+        const cancel = pg.cp3pg_cancel_start(conn);
+        if (cancel > 0) {
+          await pollUntil(() => pg.cp3pg_cancel_progress(cancel), 5000);
+          pg.cp3pg_cancel_finish(cancel);
+        }
+        // Keep draining; the cancelled statement reports its own error
+        // result with SQLSTATE 57014.
+        await pollUntil(() => pg.cp3pg_query_progress(conn), 10000);
+        break;
+      }
+      await sleep(5);
+    }
+  }
+  let last = 0;
+  while (true) {
+    const h = pg.cp3pg_get_result(conn);
+    if (h === 0) {
+      return last;
+    }
+    const s = pg.cp3pg_result_status(h);
+    if (s === RESULT_PIPELINE_SYNC) {
+      // Pipeline Sync marker: irrelevant outside pipelines.
+      pg.cp3pg_clear(h);
+      continue;
+    }
+    if (last !== 0) {
+      pg.cp3pg_clear(last);
+    }
+    last = h;
+  }
+  // Unreachable; the loop only exits via return. Present so the
+  // compiler accepts the ending.
+  return 0;
+}
+
+// Like drainLast but validates the result of a prepared-statement prepare.
+// Throws (as a rejected promise) when the server rejects the prepare.
+async function drainPrepare(conn: number): Promise<undefined> {
+  await io.pollUntilDone(
+    () => pg.cp3pg_socket(conn),
+    () => pg.cp3pg_query_progress(conn),
+  );
+  while (true) {
+    const h = pg.cp3pg_get_result(conn);
+    if (h === 0) {
+      return undefined;
+    }
+    const s = pg.cp3pg_result_status(h);
+    if (s === RESULT_FATAL_ERROR) {
+      // Surface the error as a rejected drain so callers see it.
+      const msg = pg.cp3pg_result_error(h);
+      pg.cp3pg_clear(h);
+      throw new Error(msg);
+    }
+    pg.cp3pg_clear(h);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+// Run a simple-protocol query (no parameters). Returns a result handle, or
+// 0 when libpq produced no result. A SQL error is still a result: check
+// resultOk(). The result handle must be released with clear().
+export async function query(conn: number, sql: string): Promise<number> {
+  if (pg.cp3pg_send_query(conn, sql) !== 0) {
+    return 0;
+  }
+  const res = await drainLast(conn, 0);
+  return res;
+}
+
+// Like query(), but the statement is cancelled by PQcancel when it has not
+// finished within `statementTimeout` milliseconds. The cancelled statement
+// reports its own error result with SQLSTATE 57014; check resultOk() and
+// resultSqlstate().
+export async function queryTimeout(conn: number, sql: string,
+                                   statementTimeout: number): Promise<number> {
+  if (pg.cp3pg_send_query(conn, sql) !== 0) {
+    return 0;
+  }
+  const res = await drainLast(conn, statementTimeout);
+  return res;
+}
+
+// Run an extended-protocol query with parameters packed by the caller.
+// "packed" is produced by textParam()/intParam()/realParam()/boolParam()/
+// nilParam() and joined with " " (or pack2/pack3). Returns a result handle,
+// or 0 on failure.
+export async function queryParams(conn: number, sql: string, packed: string): Promise<number> {
+  if (pg.cp3pg_send_query_params(conn, sql, packed, 0) !== 0) {
+    return 0;
+  }
+  return await drainLast(conn, 0);
+}
+
+// Like queryParams(), but the statement is cancelled by PQcancel when it
+// has not finished within `statementTimeout` milliseconds (SQLSTATE 57014
+// surfaces in the result when the cancel wins).
+export async function queryParamsTimeout(conn: number, sql: string,
+                                         packed: string,
+                                         statementTimeout: number): Promise<number> {
+  if (pg.cp3pg_send_query_params(conn, sql, packed, 0) !== 0) {
+    return 0;
+  }
+  return await drainLast(conn, statementTimeout);
+}
+
+// queryParams with a binary result format (see valueBinary()).
+export async function queryParamsBinary(conn: number, sql: string, packed: string): Promise<number> {  if (pg.cp3pg_send_query_params(conn, sql, packed, 1) !== 0) {
+    return 0;
+  }
+  return await drainLast(conn, 0);
+}
+
+// Create a named server-side prepared statement. `nparams` is the number of
+// parameters the statement expects. Returns true on success; false and
+// lastError() then carry the failure.
+export async function prepare(conn: number, name: string, sql: string, nparams: number): Promise<boolean> {
+  if (pg.cp3pg_send_prepare(conn, name, sql, nparams) !== 0) {
+    return false;
+  }
+  try {
+    await drainPrepare(conn);
+  } catch (err) {
+    return false;
+  }
+  preparedStatements.set(preparedKey(conn, name), nparams);
+  return true;
+}
+
+// Execute a previously prepared statement on this connection. Returns a
+// result handle, or 0 when the name is unknown on this connection or the
+// send fails. Call prepare() first.
+export async function executePrepared(conn: number, name: string, packed: string): Promise<number> {
+  if (!preparedStatements.has(preparedKey(conn, name))) {
+    return 0;
+  }
+  if (pg.cp3pg_send_query_prepared(conn, name, packed, 0) !== 0) {
+    return 0;
+  }
+  return await drainLast(conn, 0);
+}
+
+// Execute a previously prepared statement with a binary result format.
+export async function executePreparedBinary(conn: number, name: string, packed: string): Promise<number> {
+  if (!preparedStatements.has(preparedKey(conn, name))) {
+    return 0;
+  }
+  if (pg.cp3pg_send_query_prepared(conn, name, packed, 1) !== 0) {
+    return 0;
+  }
+  return await drainLast(conn, 0);
+}
+
+// ---------------------------------------------------------------------------
+// DDL/DML shortcut
+// ---------------------------------------------------------------------------
+
+// Run a statement and return its affected-row count. Returns -1 when
+// libpq could not produce a result or the statement failed (see
+// lastError()/resultError() semantics: the result handle is released).
+export async function execute(conn: number, sql: string): Promise<number> {
+  const res = await query(conn, sql);
+  if (res === 0) {
+    return -1;
+  }
+  return finishExecute(res);
+}
+
+// Same for an extended-protocol query with packed parameters.
+export async function executeParams(conn: number, sql: string, packed: string): Promise<number> {
+  const res = await queryParams(conn, sql, packed);
+  if (res === 0) {
+    return -1;
+  }
+  return finishExecute(res);
+}
+
+function finishExecute(res: number): number {
+  if (!isOk(res)) {
+    pg.cp3pg_clear(res);
+    return -1;
+  }
+  const n = pg.cp3pg_affected(res);
+  pg.cp3pg_clear(res);
+  return n;
+}
+
+// Run fn inside a transaction on the given connection; COMMIT on success,
+// ROLLBACK on throw. The nested queries see the same connection, so they
+// participate in the transaction.
+export async function transaction(conn: number,
+                                  fn: (conn: number) => Promise<undefined>):
+    Promise<undefined> {
+  await query(conn, "BEGIN");
+  let failed = false;
+  let errMessage = "unknown error";
+  try {
+    await fn(conn);
+  } catch (err) {
+    failed = true;
+    errMessage = err.message;
+  }
+  if (failed) {
+    // NB: co_await is not allowed inside a catch handler, so the
+    // rollback happens here, after it.
+    await query(conn, "ROLLBACK");
+    throw new Error("transaction failed: " + errMessage);
+  }
+  await query(conn, "COMMIT");
+  return undefined;
+}
+
+function isOk(res: number): boolean {
+  const s = pg.cp3pg_result_status(res);
+  return s >= 0 && s !== RESULT_FATAL_ERROR && pg.cp3pg_result_error(res) === "";
+}

@@ -1,289 +1,264 @@
-// postgres - a small, synchronous libpq wrapper for cp3.
+// postgres - an asynchronous PostgreSQL client for cp3, built on libpq.
 //
-// The native layer (`native/include/postgres_shim.h`) keeps PGconn* and
-// PGresult* on the C++ side and exposes integer handles. This module exposes
-// those handles as plain numbers so the API works across cp3 module boundaries
-// in beta one: exported classes and array return types do not currently
-// codegen when imported from another file.
+//   import postgres from "postgres";
+//   const conn = await postgres.connect("host=127.0.0.1 port=55432 user=postgres");
+//   if (conn > 0) {
+//     const res = await postgres.queryParams(conn, "select $1::int as n",
+//                                            postgres.textParam("41"));
+//     console.log("n:", postgres.valueByName(res, 0, "n"));
+//     postgres.clear(res);
+//     postgres.close(conn);
+//   }
 //
-// Ownership:
-//   * connect()/connectTo() return a connection handle; close() releases it.
-//   * query()/query1()/query2()/query3() return a result handle; clear()
-//     releases it.
-//   * A result handle is independent of its connection, but it is only valid
-//     until clear() is called.
+// Pool:
+//   const pool = postgres.poolCreate("host=127.0.0.1 port=55432 user=postgres",
+//                                    10, 0);
+//   const res = await postgres.poolQuery(pool, "select 1 as one");
+//   console.log("one:", postgres.valueByName(res, 0, "one"));
+//   postgres.clear(res);
+//   await postgres.poolEnd(pool);
 //
-// All calls are synchronous: libpq's simple query protocol blocks until the
-// server answers. Run long queries off the main event loop when that matters.
+// Rows are read through free functions (valueByName/value/isNull); the API
+// is entirely free functions over integer handles, because class instances
+// do not cross module boundaries in this compiler.
+//
+// This module re-exports the full public surface of the package.
 
 import native "postgres" as pg;
 
-// libpq ConnStatusType values.
-export const CONNECTION_OK: number = 0;
-export const CONNECTION_BAD: number = 1;
-
-// libpq ExecStatusType values used by resultStatus().
-export const RESULT_EMPTY_QUERY: number = 0;
-export const RESULT_COMMAND_OK: number = 1;
-export const RESULT_TUPLES_OK: number = 2;
-export const RESULT_FATAL_ERROR: number = 7;
-
-// ---------------------------------------------------------------------------
-// Connections
-// ---------------------------------------------------------------------------
-
-// Open a connection from a libpq conninfo string:
-//   "host=127.0.0.1 port=5432 dbname=app user=app password=secret"
-// Returns a positive handle, or 0 on failure (see lastError()).
-export function connect(conninfo: string): number {
-  return pg.cp3pg_connect(conninfo);
-}
-
-// Build a conninfo string from the common fields. Values are quoted for
-// libpq, so spaces, quotes and backslashes survive.
-export function conninfo(host: string, port: number, database: string,
-                         user: string, password: string): string {
-  return "host=" + quoteConninfo(host) +
-         " port=" + port.toString() +
-         " dbname=" + quoteConninfo(database) +
-         " user=" + quoteConninfo(user) +
-         " password=" + quoteConninfo(password);
-}
-
-// Open a connection from the common fields. Returns 0 on failure.
-export function connectTo(host: string, port: number, database: string,
-                          user: string, password: string): number {
-  return connect(conninfo(host, port, database, user, password));
-}
-
-// Close a connection and free its PGconn. Closing 0 or an unknown handle is a
-// no-op.
-export function close(conn: number): void {
-  pg.cp3pg_close(conn);
-}
-
-// libpq ConnStatusType of a live connection, or -1 for an unknown handle.
-export function status(conn: number): number {
-  return pg.cp3pg_status(conn);
-}
-
-// True when the handle is live and libpq reports CONNECTION_OK.
-export function isOpen(conn: number): boolean {
-  return conn !== 0 && status(conn) === CONNECTION_OK;
-}
-
-// Last libpq error recorded on the connection ("" when there is none).
-export function connectionError(conn: number): string {
-  return pg.cp3pg_error(conn);
-}
-
-// Error from the most recent failed connect() on this thread.
-export function lastError(): string {
-  return pg.cp3pg_last_error();
-}
-
-// libpq's server version number, e.g. 170006 for PostgreSQL 17.6. Returns -1
-// for an unknown handle.
-export function serverVersion(conn: number): number {
-  return pg.cp3pg_server_version(conn);
-}
-
-// ---------------------------------------------------------------------------
-// Queries
-// ---------------------------------------------------------------------------
-
-// Run one SQL command. Returns a result handle, or 0 when libpq could not
-// produce a result (the reason is then in lastError()).
-//
-// A SQL error is still a result: check resultOk()/resultError(). Release the
-// handle with clear().
-export function query(conn: number, sql: string): number {
-  return pg.cp3pg_exec(conn, sql);
-}
-
-// Parameterised query with one text parameter ($1).
-export function query1(conn: number, sql: string, p1: string): number {
-  return pg.cp3pg_exec1(conn, sql, p1);
-}
-
-// Parameterised query with two text parameters ($1, $2).
-export function query2(conn: number, sql: string, p1: string,
-                       p2: string): number {
-  return pg.cp3pg_exec2(conn, sql, p1, p2);
-}
-
-// Parameterised query with three text parameters ($1, $2, $3).
-export function query3(conn: number, sql: string, p1: string, p2: string,
-                       p3: string): number {
-  return pg.cp3pg_exec3(conn, sql, p1, p2, p3);
-}
-
-// ---------------------------------------------------------------------------
-// Results
-// ---------------------------------------------------------------------------
-
-// libpq ExecStatusType of a result, or -1 for an unknown handle.
-export function resultStatus(res: number): number {
-  return pg.cp3pg_result_status(res);
-}
-
-// Result error text ("" when the statement succeeded).
-export function resultError(res: number): string {
-  return pg.cp3pg_result_error(res);
-}
-
-// True when the handle is live and the result carries no error text.
-export function resultOk(res: number): boolean {
-  return resultStatus(res) >= 0 && resultError(res) === "";
-}
-
-// Command tag, e.g. "INSERT 0 1" or "SELECT 3".
-export function command(res: number): string {
-  return pg.cp3pg_cmd_status(res);
-}
-
-// Number of rows affected by an INSERT/UPDATE/DELETE (0 for other commands).
-export function affected(res: number): number {
-  return pg.cp3pg_affected(res);
-}
-
-// Number of rows in a result, or -1 for an unknown handle.
-export function rowCount(res: number): number {
-  return pg.cp3pg_ntuples(res);
-}
-
-// Number of columns in a result, or -1 for an unknown handle.
-export function fieldCount(res: number): number {
-  return pg.cp3pg_nfields(res);
-}
-
-// Column name at a zero-based position ("" when out of range).
-export function columnName(res: number, col: number): string {
-  return pg.cp3pg_fname(res, col);
-}
-
-// Zero-based column position for a name, or -1 when there is no such column.
-export function columnIndex(res: number, name: string): number {
-  return pg.cp3pg_fnumber(res, name);
-}
-
-// Value at a zero-based row and column. SQL NULL and the empty string both
-// return ""; use isNull() when the difference matters.
-export function value(res: number, row: number, col: number): string {
-  return pg.cp3pg_getvalue(res, row, col);
-}
-
-// Value at a zero-based row, looked up by column name.
-export function valueByName(res: number, row: number, name: string): string {
-  return value(res, row, columnIndex(res, name));
-}
-
-// True when the value at row/col is SQL NULL.
-export function isNull(res: number, row: number, col: number): boolean {
-  return pg.cp3pg_getisnull(res, row, col) !== 0;
-}
-
-// True when the value at row/name is SQL NULL.
-export function isNullByName(res: number, row: number, name: string): boolean {
-  return isNull(res, row, columnIndex(res, name));
-}
-
-// Release a result handle. Clearing 0 or an unknown handle is a no-op.
-export function clear(res: number): void {
-  pg.cp3pg_clear(res);
-}
-
-// Run a statement and return its affected-row count (0 for a query that
-// returns rows). The result handle is released immediately. Returns -1 when
-// libpq could not produce a result.
-export function execute(conn: number, sql: string): number {
-  const res = query(conn, sql);
-  if (res === 0) return -1;
-  if (!resultOk(res)) {
-    clear(res);
-    return -1;
-  }
-  const count = affected(res);
-  clear(res);
-  return count;
-}
-
-// ---------------------------------------------------------------------------
-// Escaping
-// ---------------------------------------------------------------------------
-
-// Quote a value as a SQL literal, including the surrounding quotes.
-export function escapeLiteral(conn: number, value: string): string {
-  return pg.cp3pg_escape_literal(conn, value);
-}
-
-// Quote an identifier (table, column, ...), including the surrounding quotes.
-export function escapeIdentifier(conn: number, value: string): string {
-  return pg.cp3pg_escape_identifier(conn, value);
-}
-
-// ---------------------------------------------------------------------------
-// Build information
-// ---------------------------------------------------------------------------
-
-// libpq's compiled-in version, independent of any connection.
-export function libVersion(): number {
-  return pg.cp3pg_lib_version();
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function quoteConninfo(value: string): string {
-  let out = "'";
-  for (let i = 0; i < value.length; i = i + 1) {
-    const ch = value.charAt(i);
-    if (ch === "\\" || ch === "'") {
-      out = out + "\\";
-    }
-    out = out + ch;
-  }
-  return out + "'";
-}
-
-// Package entry object (required by `cp3 build` for "type": "package").
-export default {
+import {
   connect,
   connectTo,
-  conninfo,
   close,
   status,
   isOpen,
   connectionError,
   lastError,
   serverVersion,
+  conninfoString,
+  escapeLiteral,
+  escapeIdentifier,
   query,
-  query1,
-  query2,
-  query3,
+  queryTimeout,
+  queryParams,
+  queryParamsBinary,
+  queryParamsTimeout,
+  prepare,
+  executePrepared,
+  executePreparedBinary,
   execute,
+  executeParams,
+} from "./client.cp3";
+
+import {
   resultStatus,
   resultError,
   resultOk,
+  resultDiag,
+  resultSqlstate,
+  resultSeverity,
   command,
   affected,
   rowCount,
   fieldCount,
   columnName,
   columnIndex,
+  fieldOid,
   value,
+  valueBinary,
   valueByName,
+  valueBinaryByName,
   isNull,
   isNullByName,
   clear,
+} from "./result.cp3";
+
+import {
+  textParam,
+  intParam,
+  realParam,
+  boolParam,
+  nilParam,
+  pack2,
+  pack3,
+} from "./params.cp3";
+
+import { conninfo, quoteConninfoField } from "./conninfo.cp3";
+import { transaction } from "./client.cp3";
+
+import {
+  poolCreate,
+  poolAcquire,
+  poolRelease,
+  poolSize,
+  poolPending,
+  poolQuery,
+  poolQueryParams,
+  poolQueryParamsBinary,
+  poolExecute,
+  poolExecuteParams,
+  poolEnd,
+} from "./pool.cp3";
+
+import {
+  CONNECTION_OK,
+  CONNECTION_BAD,
+  RESULT_EMPTY_QUERY,
+  RESULT_COMMAND_OK,
+  RESULT_TUPLES_OK,
+  RESULT_FATAL_ERROR,
+  RESULT_PIPELINE_SYNC,
+  RESULT_PIPELINE_ABORTED,
+} from "./types.cp3";
+
+export {
+  connect,
+  connectTo,
+  close,
+  status,
+  isOpen,
+  connectionError,
+  lastError,
+  serverVersion,
+  conninfoString,
   escapeLiteral,
   escapeIdentifier,
+  query,
+  queryTimeout,
+  queryParams,
+  queryParamsBinary,
+  queryParamsTimeout,
+  prepare,
+  executePrepared,
+  executePreparedBinary,
+  execute,
+  executeParams,
+  resultStatus,
+  resultError,
+  resultOk,
+  resultDiag,
+  resultSqlstate,
+  resultSeverity,
+  command,
+  affected,
+  rowCount,
+  fieldCount,
+  columnName,
+  columnIndex,
+  fieldOid,
+  value,
+  valueBinary,
+  valueByName,
+  valueBinaryByName,
+  isNull,
+  isNullByName,
+  clear,
+  textParam,
+  intParam,
+  realParam,
+  boolParam,
+  nilParam,
+  pack2,
+  pack3,
+  conninfo,
+  quoteConninfoField,
+  transaction,
+  poolCreate,
+  poolAcquire,
+  poolRelease,
+  poolSize,
+  poolPending,
+  poolQuery,
+  poolQueryParams,
+  poolQueryParamsBinary,
+  poolExecute,
+  poolExecuteParams,
+  poolEnd,
+  CONNECTION_OK,
+  CONNECTION_BAD,
+  RESULT_EMPTY_QUERY,
+  RESULT_COMMAND_OK,
+  RESULT_TUPLES_OK,
+  RESULT_FATAL_ERROR,
+  RESULT_PIPELINE_SYNC,
+  RESULT_PIPELINE_ABORTED,
+};
+
+// libpq's compiled-in version, e.g. 170006 for 17.6.
+export function libVersion(): number {
+  return pg.cp3pg_lib_version();
+}
+
+export default {
+  connect,
+  connectTo,
+  close,
+  status,
+  isOpen,
+  connectionError,
+  lastError,
+  serverVersion,
+  conninfoString,
+  escapeLiteral,
+  escapeIdentifier,
+  query,
+  queryTimeout,
+  queryParams,
+  queryParamsBinary,
+  queryParamsTimeout,
+  prepare,
+  executePrepared,
+  executePreparedBinary,
+  execute,
+  executeParams,
+  resultStatus,
+  resultError,
+  resultOk,
+  resultDiag,
+  resultSqlstate,
+  resultSeverity,
+  command,
+  affected,
+  rowCount,
+  fieldCount,
+  columnName,
+  columnIndex,
+  fieldOid,
+  value,
+  valueBinary,
+  valueByName,
+  valueBinaryByName,
+  isNull,
+  isNullByName,
+  clear,
+  textParam,
+  intParam,
+  realParam,
+  boolParam,
+  nilParam,
+  pack2,
+  pack3,
+  conninfo,
+  quoteConninfoField,
+  transaction,
+  poolCreate,
+  poolAcquire,
+  poolRelease,
+  poolSize,
+  poolPending,
+  poolQuery,
+  poolQueryParams,
+  poolQueryParamsBinary,
+  poolExecute,
+  poolExecuteParams,
+  poolEnd,
   libVersion,
   CONNECTION_OK,
   CONNECTION_BAD,
   RESULT_EMPTY_QUERY,
   RESULT_COMMAND_OK,
   RESULT_TUPLES_OK,
-  RESULT_FATAL_ERROR
+  RESULT_FATAL_ERROR,
+  RESULT_PIPELINE_SYNC,
+  RESULT_PIPELINE_ABORTED,
 };

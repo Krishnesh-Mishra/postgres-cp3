@@ -1,0 +1,116 @@
+// harness.cp3 - shared assertion helpers for the test stages.
+//
+// Free functions over module-scope counters: cp3 v0.2.0 instances don't
+// cross module boundaries, but imported free functions do.
+
+import console from "std/console";
+
+let passed = 0;
+let failed = 0;
+
+export function section(name: string): undefined {
+  console.log("");
+  console.log("== " + name + " ==");
+  return undefined;
+}
+
+export function passCount(): number {
+  return passed;
+}
+
+export function failureCount(): number {
+  return failed;
+}
+
+export function ok(name: string): undefined {
+  passed = passed + 1;
+  console.log("ok - " + name);
+  return undefined;
+}
+
+export function fail(name: string, detail: string): undefined {
+  failed = failed + 1;
+  if (detail.length > 0) {
+    console.log("not ok - " + name + " (" + detail + ")");
+  } else {
+    console.log("not ok - " + name);
+  }
+  return undefined;
+}
+
+export function expectTrue(name: string, condition: boolean): undefined {
+  if (condition) {
+    ok(name);
+  } else {
+    fail(name, "expected true");
+  }
+  return undefined;
+}
+
+export function expectFalse(name: string, condition: boolean): undefined {
+  if (!condition) {
+    ok(name);
+  } else {
+    fail(name, "expected false");
+  }
+  return undefined;
+}
+
+export function expectNumber(name: string, actual: number,
+                             expected: number): undefined {
+  if (actual === expected) {
+    ok(name);
+  } else {
+    fail(name, "got " + actual.toString() + ", want " + expected.toString());
+  }
+  return undefined;
+}
+
+export function expectAtLeast(name: string, actual: number,
+                              minimum: number): undefined {
+  if (actual >= minimum) {
+    ok(name);
+  } else {
+    fail(name, "got " + actual.toString() + ", want >= " + minimum.toString());
+  }
+  return undefined;
+}
+
+export function expectString(name: string, actual: string,
+                             expected: string): undefined {
+  if (actual === expected) {
+    ok(name);
+  } else {
+    fail(name, "got '" + actual + "', want '" + expected + "'");
+  }
+  return undefined;
+}
+
+export function expectNonEmpty(name: string, actual: string): undefined {
+  if (actual.length > 0) {
+    ok(name);
+  } else {
+    fail(name, "expected a non-empty string");
+  }
+  return undefined;
+}
+
+export function expectContains(name: string, actual: string,
+                               needle: string): undefined {
+  if (actual.includes(needle)) {
+    ok(name);
+  } else {
+    fail(name, "'" + actual + "' does not contain '" + needle + "'");
+  }
+  return undefined;
+}
+
+export function expectStartsWith(name: string, actual: string,
+                                 prefix: string): undefined {
+  if (actual.startsWith(prefix)) {
+    ok(name);
+  } else {
+    fail(name, "'" + actual + "' does not start with '" + prefix + "'");
+  }
+  return undefined;
+}

@@ -48,7 +48,7 @@ function Resolve-Cp3([string]$explicit) {
     $cmd = Get-Command cp3 -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
 
-    $known = "C:\Users\Krishnesh\AppData\Local\Programs\cp3\bin\cp3.cmd"
+    $known = Join-Path $env:LOCALAPPDATA "Programs\cp3\bin\cp3.cmd"
     if (Test-Path $known) { return $known }
 
     throw "Could not find cp3. Pass -Cp3 <path-to-cp3.cmd> or add it to PATH."
@@ -163,6 +163,10 @@ Remove-Item Env:CP3_PG_CONNINFO -ErrorAction SilentlyContinue
 
 $exitCode = 1
 try {
+    # cp3 refuses to overwrite the native DLLs it copies next to the
+    # executable, so always start from a clean output directory.
+    Remove-Item -Recurse -Force (Join-Path $tests ".cp3\out") -ErrorAction SilentlyContinue
+
     Push-Location $tests
     & $cp3Exe run src\main.cp3
     $exitCode = $LASTEXITCODE

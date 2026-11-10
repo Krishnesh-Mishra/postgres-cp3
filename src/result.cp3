@@ -1,0 +1,134 @@
+// result.cp3 - result inspection free functions over integer handles.
+//
+// Every result is referenced by a positive integer handle minted by the
+// native shim; clear() releases it. Unknown / released handles return the
+// documented sentinels (-1, "", false) instead of crashing.
+
+import native "postgres" as pg;
+import {
+  RESULT_TUPLES_OK,
+  RESULT_COMMAND_OK,
+  RESULT_PIPELINE_ABORTED,
+  RESULT_FATAL_ERROR,
+} from "./types.cp3";
+
+// Result diagnostic field codes (PQresultErrorField), as raw single chars.
+export const DIAG_SEVERITY: number = 83;   // 'S'
+export const DIAG_SEVERITY_V: number = 86; // 'V'
+export const DIAG_SQLSTATE: number = 67;   // 'C'
+export const DIAG_MESSAGE: number = 77;    // 'M'
+export const DIAG_DETAIL: number = 68;     // 'D'
+export const DIAG_HINT: number = 72;       // 'H'
+export const DIAG_POSITION: number = 80;   // 'P'
+
+// libpq ExecStatusType of the result, or -1 for an unknown handle.
+export function resultStatus(res: number): number {
+  return pg.cp3pg_result_status(res);
+}
+
+// Result error text ("" when the statement succeeded or the handle is
+// unknown).
+export function resultError(res: number): string {
+  return pg.cp3pg_result_error(res);
+}
+
+// A raw diagnostic field from PQresultErrorField. `field` is one of the
+// DIAG_* constants above (or any single-char code, e.g. 115 for 's').
+// Returns "" when unknown or the field is absent.
+export function resultDiag(res: number, field: number): string {
+  return pg.cp3pg_result_diag(res, field);
+}
+
+// SQLSTATE of the result's error, or "" when the result succeeded or the
+// handle is unknown.
+export function resultSqlstate(res: number): string {
+  return pg.cp3pg_result_diag(res, DIAG_SQLSTATE);
+}
+
+// Server-reported severity (e.g. "ERROR"), or "" when none.
+export function resultSeverity(res: number): string {
+  return pg.cp3pg_result_diag(res, DIAG_SEVERITY);
+}
+
+// True when the handle is live and the result carries no error.
+export function resultOk(res: number): boolean {
+  const status = resultStatus(res);
+  return status >= 0 && status !== RESULT_FATAL_ERROR &&
+         status !== RESULT_PIPELINE_ABORTED &&
+         resultError(res) === "";
+}
+
+// Command tag, e.g. "INSERT 0 1" or "SELECT 3" ("" for unknown handle).
+export function command(res: number): string {
+  return pg.cp3pg_cmd_status(res);
+}
+
+// Rows changed by INSERT/UPDATE/DELETE; rows returned for a SELECT; -1 for
+// an unknown handle.
+export function affected(res: number): number {
+  return pg.cp3pg_affected(res);
+}
+
+// Number of rows in a result, or -1 for an unknown handle.
+export function rowCount(res: number): number {
+  return pg.cp3pg_ntuples(res);
+}
+
+// Number of columns in a result, or -1 for an unknown handle.
+export function fieldCount(res: number): number {
+  return pg.cp3pg_nfields(res);
+}
+
+// Column name at a zero-based position ("" when out of range).
+export function columnName(res: number, col: number): string {
+  return pg.cp3pg_fname(res, col);
+}
+
+// Zero-based column position for a name, or -1 when there is no such column.
+export function columnIndex(res: number, name: string): number {
+  return pg.cp3pg_fnumber(res, name);
+}
+
+// Column OID at a zero-based position (-1 when out of range).
+export function fieldOid(res: number, col: number): number {
+  return pg.cp3pg_ftype(res, col);
+}
+
+// Cell value. SQL NULL and the empty string both decode to ""; use
+// isNull() to distinguish. Booleans decode as "true"/"false".
+export function value(res: number, row: number, col: number): string {
+  return pg.cp3pg_getvalue(res, row, col);
+}
+
+// Cell value in binary format decoded per the column's OID. Booleans as
+// "true"/"false", ints decimal, floats %.17g, bytea base64.
+export function valueBinary(res: number, row: number, col: number): string {
+  return pg.cp3pg_getvalue_decoded(res, row, col);
+}
+
+// Cell value looked up by column name.
+export function valueByName(res: number, row: number, name: string): string {
+  return value(res, row, columnIndex(res, name));
+}
+
+// Cell value in binary format, looked up by column name.
+export function valueBinaryByName(res: number, row: number, name: string): string {
+  return valueBinary(res, row, columnIndex(res, name));
+}
+
+// True when the cell is SQL NULL (or the handle is released / indices are
+// out of range).
+export function isNull(res: number, row: number, col: number): boolean {
+  return pg.cp3pg_getisnull(res, row, col) !== 0;
+}
+
+// True when the cell is SQL NULL, looked up by column name.
+export function isNullByName(res: number, row: number, name: string): boolean {
+  return isNull(res, row, columnIndex(res, name));
+}
+
+// Release the result handle. Clearing 0 or an unknown handle is a no-op.
+export function clear(res: number): undefined {
+  pg.cp3pg_clear(res);
+  return undefined;
+}

@@ -1,0 +1,59 @@
+// 08-escapes.cp3 - escapeLiteral / escapeIdentifier.
+
+import {
+  connect,
+  close,
+  query,
+  escapeLiteral,
+  escapeIdentifier,
+} from "../../../src/client.cp3";
+import { valueByName, clear, columnName } from "../../../src/result.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("escaping");
+
+  const conn = await connect(clientConninfo());
+
+  expectString("escapeLiteral plain", escapeLiteral(conn, "hello"), "'hello'");
+  expectString("escapeLiteral quote", escapeLiteral(conn, "O'Reilly"),
+                 "'O''Reilly'");
+  expectString("escapeLiteral empty", escapeLiteral(conn, ""), "''");
+  expectString("escapeIdentifier plain", escapeIdentifier(conn, "items"),
+                 "\"items\"");
+  expectString("escapeIdentifier mixed case",
+                 escapeIdentifier(conn, "My Table"), "\"My Table\"");
+  expectString("escapeIdentifier embedded quote",
+                 escapeIdentifier(conn, "a\"b"), "\"a\"\"b\"");
+  expectString("escapeIdentifier empty", escapeIdentifier(conn, ""), "\"\"");
+
+  const dangerous = "a\\b'c";
+  const literal = escapeLiteral(conn, dangerous);
+  const r1 = await query(conn, "select " + literal + "::text as value");
+  expectString("escaped literal round-trips",
+                 valueByName(r1, 0, "value"), dangerous);
+  clear(r1);
+
+  const dangerousSql = "'; drop table cp3_test_items; --";
+  const safeLiteral = escapeLiteral(conn, dangerousSql);
+  const r2 = await query(conn, "select " + safeLiteral + "::text as value");
+  expectString("escaped dangerous literal round-trips",
+                 valueByName(r2, 0, "value"), dangerousSql);
+  clear(r2);
+
+  const identifier = escapeIdentifier(conn, "weird name");
+  const r3 = await query(conn, "select 1 as " + identifier);
+  expectString("escaped identifier column name",
+                 columnName(r3, 0), "weird name");
+  clear(r3);
+
+  const unicodeIdentifier = escapeIdentifier(conn, "cafÃ©");
+  const r4 = await query(conn, "select 7 as " + unicodeIdentifier);
+  expectString("Unicode identifier column name",
+                 columnName(r4, 0), "cafÃ©");
+  clear(r4);
+
+  close(conn);
+  return undefined;
+}

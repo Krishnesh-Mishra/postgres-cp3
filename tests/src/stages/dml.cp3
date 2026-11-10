@@ -1,0 +1,102 @@
+// 05-dml.cp3 - DDL/DML, command tags, affected rows, error paths.
+
+import {
+  connect,
+  close,
+  query,
+  execute,
+} from "../../../src/client.cp3";
+import {
+  clear,
+  resultOk,
+  resultStatus,
+  resultError,
+  resultSqlstate,
+  command,
+  affected,
+} from "../../../src/result.cp3";
+import {
+  RESULT_COMMAND_OK,
+  RESULT_TUPLES_OK,
+  RESULT_FATAL_ERROR,
+} from "../../../src/index.cp3";
+import {
+  ITEMS_TABLE,
+  countRows,
+  createItemsTable,
+  insertItems,
+} from "../support/fixtures.cp3";
+import { clientConninfo } from "../support/env.cp3";
+import { section, passCount, failureCount, ok, fail, expectTrue, expectFalse, expectNumber, expectAtLeast, expectString, expectNonEmpty, expectContains, expectStartsWith } from "../support/harness.cp3";
+
+export async function run(): Promise<undefined> {
+  section("DDL and DML");
+
+  const conn = await connect(clientConninfo());
+
+  await createItemsTable(conn);
+  await insertItems(conn);
+  expectString("three rows inserted", await countRows(conn, ITEMS_TABLE), "3");
+
+  const create = await query(
+    conn, "create table cp3_test_items_alt (id serial primary key)"
+  );
+  expectTrue("CREATE TABLE ok", resultOk(create));
+  expectNumber("CREATE TABLE status", resultStatus(create), RESULT_COMMAND_OK);
+  expectString("CREATE TABLE command tag", command(create), "CREATE TABLE");
+  clear(create);
+  await query(conn, "drop table cp3_test_items_alt");
+
+  const insert = await query(
+    conn, "insert into " + ITEMS_TABLE + " (name, qty) values ('delta', 4)"
+  );
+  expectString("INSERT command tag", command(insert), "INSERT 0 1");
+  expectNumber("INSERT affected", affected(insert), 1);
+  clear(insert);
+
+  const update = await query(
+    conn,
+    "update " + ITEMS_TABLE + " set qty = qty + 10 where name in ('delta', 'alpha')"
+  );
+  expectString("UPDATE command tag", command(update), "UPDATE 2");
+  expectNumber("UPDATE affected", affected(update), 2);
+  clear(update);
+
+  const del = await query(
+    conn, "delete from " + ITEMS_TABLE + " where name = 'delta'"
+  );
+  expectString("DELETE command tag", command(del), "DELETE 1");
+  expectNumber("DELETE affected", affected(del), 1);
+  clear(del);
+
+  // SELECT result carries rowCount = number of rows.
+  const sel = await query(conn, "select 1 as one");
+  expectNumber("SELECT status is TUPLES_OK", resultStatus(sel), RESULT_TUPLES_OK);
+  clear(sel);
+
+  // execute() shortcut returns the affected count.
+  const affectedRows = await execute(
+    conn, "update " + ITEMS_TABLE + " set qty = qty where name = 'alpha'"
+  );
+  expectNumber("execute UPDATE affected", affectedRows, 1);
+
+  // A failing statement reports an error result carrying the SQLSTATE.
+  const missing = await query(conn, "select * from cp3_missing_table_xyz");
+  expectFalse("missing table is not ok", resultOk(missing));
+  expectNumber("missing table status", resultStatus(missing), RESULT_FATAL_ERROR);
+  expectString("missing table SQLSTATE is 42P01",
+                 resultSqlstate(missing), "42P01");
+  expectTrue("missing table error message present",
+               resultError(missing).length > 0);
+  clear(missing);
+
+  // Syntax error reports an error result too.
+  const syntax = await query(conn, "select from");
+  expectFalse("syntax error is not ok", resultOk(syntax));
+  expectTrue("syntax error message present",
+               resultError(syntax).length > 0);
+  clear(syntax);
+
+  close(conn);
+  return undefined;
+}

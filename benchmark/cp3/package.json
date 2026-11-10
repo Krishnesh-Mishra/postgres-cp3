@@ -1,0 +1,6 @@
+{
+  "name": "postgres-cp3-bench",
+  "version": "0.2.0",
+  "type": "application",
+  "main": "bench.cp3"
+}

@@ -1,6 +1,6 @@
 {
   "name": "postgres-tests",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "application",
-  "main": "src/main.cp3"
+  "main": "src/probeRefused.cp3"
 }

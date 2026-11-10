@@ -6,6 +6,10 @@
 tests/.cp3/build
 tests/.cp3/out
 tests/.cp3/lock.json
+# materialized native dependency snapshots from cp3 link/install
+tests/.cp3/native/postgres/include/
+tests/.cp3/native/postgres/lib/
+tests/.cp3/native/postgres/runtime/
 
 # native build intermediates
 native/obj
@@ -13,6 +17,14 @@ native/build
 
 # build logs
 *.log
+
+# benchmark build artifacts
+benchmark/cpp/*.exe
+benchmark/cpp/*.dll
+benchmark/cpp/bench
+benchmark/cp3/.cp3/
+benchmark/cp3/bench.out
+benchmark/node/node_modules/
 
 # editor / OS files
 .DS_Store

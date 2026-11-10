@@ -88,16 +88,27 @@ if (-not (Test-Path $ar)) { throw "ar not found in $mingwBin" }
 New-Item -ItemType Directory -Force (Join-Path $native "obj") | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $native "lib") | Out-Null
 
-Write-Host "compiling native/src/postgres_shim.cpp"
-& $gxx -std=c++17 -O2 -Wall -Wextra `
-    -c (Join-Path $native "src\postgres_shim.cpp") `
-    -o (Join-Path $native "obj\postgres_shim.o") `
-    -I (Join-Path $native "include") `
-    -I (Join-Path $native "include\postgres")
-if ($LASTEXITCODE -ne 0) { throw "g++ failed with exit code $LASTEXITCODE" }
+# Clean stale objects so removed TUs are not archived.
+Get-ChildItem (Join-Path $native "obj") -Filter "*.o" | Remove-Item -Force
+
+foreach ($source in (Get-ChildItem (Join-Path $native "src") -Filter "*.cpp" | Sort-Object Name)) {
+    $object = Join-Path (Join-Path $native "obj") ($source.BaseName + ".o")
+    Write-Host "compiling native/src/$($source.Name)"
+    & $gxx -std=c++17 -O2 -Wall -Wextra `
+        -c $source.FullName `
+        -o $object `
+        -I (Join-Path $native "include") `
+        -I (Join-Path $native "include\postgres") `
+        -I (Join-Path $native "src")
+    if ($LASTEXITCODE -ne 0) { throw "g++ failed with exit code $LASTEXITCODE" }
+}
 
 Write-Host "archiving native/lib/libpostgres_shim.a"
-& $ar rcs (Join-Path $native "lib\libpostgres_shim.a") (Join-Path $native "obj\postgres_shim.o")
+# Remove the old archive first: `ar rcs` only appends/replaces members, so
+# stale objects from before a TU split would linger and duplicate symbols.
+Remove-Item (Join-Path $native "lib\libpostgres_shim.a") -Force -ErrorAction SilentlyContinue
+$objects = Get-ChildItem (Join-Path $native "obj") -Filter "*.o" | ForEach-Object { $_.FullName }
+& $ar rcs (Join-Path $native "lib\libpostgres_shim.a") @objects
 if ($LASTEXITCODE -ne 0) { throw "ar failed with exit code $LASTEXITCODE" }
 
 if ($RebuildImportLib) {

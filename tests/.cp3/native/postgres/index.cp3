@@ -4,29 +4,47 @@
 // The compiler loads `.cp3/native/postgres/native.json` for the
 // C++ names, argument conversions and link metadata.
 
-export function cp3pg_connect(conninfo: string): number;
+export function cp3pg_connect_start(conninfo: string): number;
+export function cp3pg_connect_progress(conn: number): number;
+export function cp3pg_socket(conn: number): number;
 export function cp3pg_close(conn: number): void;
 export function cp3pg_status(conn: number): number;
 export function cp3pg_error(conn: number): string;
 export function cp3pg_last_error(): string;
-export function cp3pg_exec(conn: number, sql: string): number;
-export function cp3pg_exec1(conn: number, sql: string, p1: string): number;
-export function cp3pg_exec2(conn: number, sql: string, p1: string, p2: string): number;
-export function cp3pg_exec3(conn: number, sql: string, p1: string, p2: string, p3: string): number;
+export function cp3pg_send_query(conn: number, sql: string): number;
+export function cp3pg_send_query_params(conn: number, sql: string, packed: string, result_format: number): number;
+export function cp3pg_send_prepare(conn: number, name: string, sql: string, nparams: number): number;
+export function cp3pg_send_query_prepared(conn: number, name: string, packed: string, result_format: number): number;
+export function cp3pg_flush(conn: number): number;
+export function cp3pg_query_progress(conn: number): number;
+export function cp3pg_enter_pipeline(conn: number): number;
+export function cp3pg_exit_pipeline(conn: number): number;
+export function cp3pg_pipeline_sync(conn: number): number;
+export function cp3pg_pipeline_status(conn: number): number;
+export function cp3pg_get_result(conn: number): number;
+export function cp3pg_result_diag(res: number, field: number): string;
 export function cp3pg_result_status(res: number): number;
 export function cp3pg_result_error(res: number): string;
 export function cp3pg_cmd_status(res: number): string;
-export function cp3pg_cmd_tuples(res: number): string;
 export function cp3pg_affected(res: number): number;
 export function cp3pg_ntuples(res: number): number;
 export function cp3pg_nfields(res: number): number;
 export function cp3pg_fname(res: number, col: number): string;
 export function cp3pg_fnumber(res: number, name: string): number;
+export function cp3pg_ftype(res: number, col: number): number;
 export function cp3pg_getvalue(res: number, row: number, col: number): string;
+export function cp3pg_getvalue_decoded(res: number, row: number, col: number): string;
 export function cp3pg_getisnull(res: number, row: number, col: number): number;
 export function cp3pg_clear(res: number): void;
 export function cp3pg_escape_literal(conn: number, value: string): string;
 export function cp3pg_escape_identifier(conn: number, value: string): string;
+export function cp3pg_cancel_start(conn: number): number;
+export function cp3pg_cancel_progress(handle: number): number;
+export function cp3pg_cancel_socket(handle: number): number;
+export function cp3pg_cancel_status(handle: number): number;
+export function cp3pg_cancel_error(handle: number): string;
+export function cp3pg_cancel_finish(handle: number): void;
+export function cp3pg_cancel_reset(handle: number): void;
 export function cp3pg_lib_version(): number;
 export function cp3pg_server_version(conn: number): number;
 
